@@ -4,9 +4,9 @@ from pathlib import Path
 
 
 def app_data_dir() -> Path:
-    """Per-user data directory, e.g. C:/Users/<user>/AppData/Local/russian-vpn."""
+    """Per-user data directory, e.g. C:/Users/<user>/AppData/Local/KaproVPN."""
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    path = Path(base) / "russian-vpn"
+    path = Path(base) / "KaproVPN"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

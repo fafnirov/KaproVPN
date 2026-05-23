@@ -34,7 +34,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Russian VPN")
+        self.setWindowTitle("KaproVPN")
         self.resize(820, 620)
 
         self.manager = ConnectionManager(on_log=self.log_received.emit)
@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         QMessageBox.about(
             self, "О программе",
-            "Russian VPN\n\n"
+            "KaproVPN\n\n"
             "Клиент на базе sing-box со встроенным split-routing'ом: "
             "российские сайты идут через ваш реальный IP, остальное — через прокси.\n\n"
             "Поддержка: trojan, vless, vmess, shadowsocks, hysteria2.",

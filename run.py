@@ -1,6 +1,6 @@
-"""Entry point for Russian VPN client."""
+"""Entry point for KaproVPN client."""
 import sys
-from russian_vpn.main import main
+from kapro_vpn.main import main
 
 if __name__ == "__main__":
     sys.exit(main())

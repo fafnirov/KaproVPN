@@ -41,7 +41,7 @@ htmlcov/
 
 # Bundled sing-box binary (downloaded at runtime, not part of source)
 singbox/sing-box.exe
-russian_vpn/data/sing-box.exe
+kapro_vpn/data/sing-box.exe
 
 # Local secrets / generated configs
 *.local.json

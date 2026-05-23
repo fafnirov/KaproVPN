@@ -15,8 +15,8 @@ def main() -> int:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Russian VPN")
-    app.setOrganizationName("russian-vpn")
+    app.setApplicationName("KaproVPN")
+    app.setOrganizationName("KaproVPN")
     app.setStyleSheet(DARK_QSS)
 
     window = MainWindow()

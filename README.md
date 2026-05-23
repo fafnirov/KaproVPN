@@ -1,4 +1,4 @@
-# Russian VPN
+# KaproVPN
 
 [English](README.md) · [Русский](README.ru.md)
 
@@ -39,14 +39,14 @@ see your real address.
 ## Install & run
 
 ```bash
-git clone <repo-url>
-cd russian-vpn
+git clone https://github.com/fafnirov/KaproVPN.git
+cd KaproVPN
 pip install -r requirements.txt
 python run.py
 ```
 
 On first launch the app downloads the latest sing-box release into
-`%LOCALAPPDATA%\russian-vpn\singbox\`.
+`%LOCALAPPDATA%\KaproVPN\singbox\`.
 
 ## How it works
 
@@ -72,7 +72,7 @@ On first launch the app downloads the latest sing-box release into
 ## Project layout
 
 ```
-russian_vpn/
+kapro_vpn/
 ├── core/
 │   ├── parser.py            # share-URL parsers
 │   ├── singbox_config.py    # generates sing-box JSON
@@ -94,7 +94,7 @@ russian_vpn/
 ```
 
 User data (saved configs, edited site list, settings, logs) lives in
-`%LOCALAPPDATA%\russian-vpn\`.
+`%LOCALAPPDATA%\KaproVPN\`.
 
 ## Contributing
 
