@@ -7,6 +7,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QFrame,
     QHBoxLayout,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -22,13 +24,14 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import storage, xray_installer
+from ..core import admin, storage, tun2socks_installer, xray_installer
+from ..core.controller import MODE_HTTP_PROXY, MODE_TUN
 from ..core.controller import ConnectionError as VPNConnectionError
 from ..core.controller import ConnectionManager
 from ..core.parser import ProxyConfig
 from .config_dialog import AddConfigDialog
 from .configs_picker import ConfigsPickerDialog
-from .installer_dialog import ensure_xray_installed
+from .installer_dialog import ensure_tun2socks_installed, ensure_xray_installed
 from .sites_dialog import SitesDialog
 from .widgets import CircleConnectButton, ConfigCard, NavBar, StatusLabel
 
@@ -120,6 +123,47 @@ class SettingsPage(QWidget):
         title.setObjectName("h1")
         outer.addWidget(title)
 
+        # --- Mode (http proxy vs TUN) ---
+        mode_label = QLabel("Режим работы")
+        mode_label.setObjectName("h2")
+        outer.addWidget(mode_label)
+
+        self.mode_group = QButtonGroup(self)
+        self.radio_http = QRadioButton(
+            "HTTP-прокси — только браузер (без прав администратора)"
+        )
+        self.radio_tun = QRadioButton(
+            "TUN — все приложения, включая Telegram (нужны права администратора)"
+        )
+        self.mode_group.addButton(self.radio_http)
+        self.mode_group.addButton(self.radio_tun)
+        current_mode = manager.settings.get("mode", MODE_HTTP_PROXY)
+        if current_mode == MODE_TUN:
+            self.radio_tun.setChecked(True)
+        else:
+            self.radio_http.setChecked(True)
+        self.radio_http.toggled.connect(self._on_mode_changed)
+        self.radio_tun.toggled.connect(self._on_mode_changed)
+        outer.addWidget(self.radio_http)
+        outer.addWidget(self.radio_tun)
+
+        # Admin status / relaunch button shown only when relevant
+        self._admin_row = QHBoxLayout()
+        self._admin_label = QLabel()
+        self._admin_label.setObjectName("dim")
+        self._admin_row.addWidget(self._admin_label, stretch=1)
+        self._relaunch_btn = QPushButton("Перезапустить от админа")
+        self._relaunch_btn.clicked.connect(self._on_relaunch_admin)
+        self._admin_row.addWidget(self._relaunch_btn)
+        admin_row_widget = QWidget()
+        admin_row_widget.setLayout(self._admin_row)
+        outer.addWidget(admin_row_widget)
+        self._refresh_admin_row()
+
+        sep0 = QFrame()
+        sep0.setFrameShape(QFrame.HLine)
+        outer.addWidget(sep0)
+
         # --- Port ---
         port_block = QVBoxLayout()
         port_block.setSpacing(4)
@@ -137,7 +181,7 @@ class SettingsPage(QWidget):
 
         # --- Auto system proxy ---
         self.auto_proxy_check = QCheckBox(
-            "Автоматически ставить системный прокси Windows"
+            "Автоматически ставить системный прокси Windows (только HTTP-режим)"
         )
         self.auto_proxy_check.setChecked(
             bool(manager.settings.get("auto_set_system_proxy", True))
@@ -174,9 +218,11 @@ class SettingsPage(QWidget):
         outer.addWidget(sep2)
 
         engine_version = xray_installer.get_installed_version() or "не установлен"
+        tun_version = tun2socks_installer.get_installed_version() or "не установлен"
         about = QLabel(
             f"<div style='color:#fafafa; font-weight:600'>KaproVPN v{__version__}</div>"
             f"<div style='color:#71717a; font-size:9pt'>Xray-core: {engine_version}</div>"
+            f"<div style='color:#71717a; font-size:9pt'>tun2socks: {tun_version}</div>"
             f"<div style='color:#71717a; font-size:9pt'>GPL v3 · "
             f"<a href='https://github.com/fafnirov/KaproVPN' style='color:#f59e0b'>"
             f"github.com/fafnirov/KaproVPN</a></div>"
@@ -212,6 +258,39 @@ class SettingsPage(QWidget):
     def _on_auto_proxy_changed(self, checked: bool) -> None:
         self._manager.update_settings(auto_set_system_proxy=checked)
         self.settings_changed.emit()
+
+    def _on_mode_changed(self, _checked: bool) -> None:
+        # Both radios fire toggled — only act when the new selection is "checked".
+        mode = MODE_TUN if self.radio_tun.isChecked() else MODE_HTTP_PROXY
+        self._manager.update_settings(mode=mode)
+        self._refresh_admin_row()
+        self.settings_changed.emit()
+
+    def _refresh_admin_row(self) -> None:
+        is_admin = admin.is_admin()
+        mode = self._manager.settings.get("mode", MODE_HTTP_PROXY)
+        if mode == MODE_TUN and not is_admin:
+            self._admin_label.setText("⚠ Запущено без прав администратора — TUN не сработает")
+            self._relaunch_btn.setVisible(True)
+        elif mode == MODE_TUN and is_admin:
+            self._admin_label.setText("✓ Запущено с правами администратора")
+            self._relaunch_btn.setVisible(False)
+        else:
+            self._admin_label.setText("")
+            self._relaunch_btn.setVisible(False)
+
+    def _on_relaunch_admin(self) -> None:
+        import sys
+        rc = admin.relaunch_as_admin()
+        if rc > 32:
+            # New elevated instance is starting. Quit this one.
+            sys.exit(0)
+        else:
+            QMessageBox.warning(
+                self, "Не удалось перезапустить",
+                "Ты отменил запрос UAC или произошла ошибка. "
+                "Запусти KaproVPN вручную правым кликом → «Запуск от имени администратора».",
+            )
 
 
 class LogsPage(QWidget):
@@ -346,7 +425,8 @@ class MainWindow(QMainWindow):
             mm, ss = divmod(elapsed, 60)
             hh, mm = divmod(mm, 60)
             timer = f"{hh:d}:{mm:02d}:{ss:02d}" if hh else f"{mm:02d}:{ss:02d}"
-            self.home_page.set_state("connected", timer)
+            mode_tag = "TUN" if self.manager.current_mode() == MODE_TUN else "HTTP"
+            self.home_page.set_state("connected", f"{timer} · {mode_tag}")
         else:
             self.home_page.set_state("idle")
 
@@ -369,6 +449,10 @@ class MainWindow(QMainWindow):
     def _do_connect(self) -> None:
         if not ensure_xray_installed(self):
             return
+        # In TUN mode we additionally need tun2socks + wintun.dll
+        if self.manager.current_mode() == MODE_TUN:
+            if not ensure_tun2socks_installed(self):
+                return
         self.home_page.set_state("connecting")
         sites = storage.load_sites()
         try:
@@ -379,7 +463,8 @@ class MainWindow(QMainWindow):
             return
         self.manager.update_settings(last_config_name=self._active_config.name)
         self._connected_at = time.time()
-        self.logs_page.append(f"[*] Подключено к «{self._active_config.name}»")
+        mode_tag = "TUN" if self.manager.current_mode() == MODE_TUN else "HTTP"
+        self.logs_page.append(f"[*] Подключено к «{self._active_config.name}» ({mode_tag})")
         self._refresh_home()
 
     def _do_disconnect(self) -> None:

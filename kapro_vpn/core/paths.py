@@ -21,6 +21,21 @@ def xray_exe() -> Path:
     return xray_dir() / "xray.exe"
 
 
+def tun_dir() -> Path:
+    """Houses tun2socks.exe and wintun.dll (they must live in the same dir)."""
+    path = app_data_dir() / "tun"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def tun2socks_exe() -> Path:
+    return tun_dir() / "tun2socks.exe"
+
+
+def wintun_dll() -> Path:
+    return tun_dir() / "wintun.dll"
+
+
 def configs_file() -> Path:
     return app_data_dir() / "configs.json"
 

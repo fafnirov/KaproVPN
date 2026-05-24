@@ -45,6 +45,10 @@ xray/geoip.dat
 xray/geosite.dat
 kapro_vpn/data/xray.exe
 
+# TUN-mode binaries (downloaded at runtime)
+tun/tun2socks.exe
+tun/wintun.dll
+
 # Local secrets / generated configs
 *.local.json
 *.pac.local
