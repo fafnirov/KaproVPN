@@ -313,6 +313,8 @@ class SettingsPage(QWidget):
 
         engine_version = xray_installer.get_installed_version() or "не установлен"
         tun_version = tun2socks_installer.get_installed_version() or "не установлен"
+        # Xray's version string is long ("Xray 26.3.27 ... go1.26.1 windows/amd64")
+        # — word-wrap so we don't clip the right edge of the panel.
         about = QLabel(
             f"<div style='color:#fafafa; font-weight:600'>KaproVPN v{__version__}</div>"
             f"<div style='color:#71717a; font-size:9pt'>Xray-core: {engine_version}</div>"
@@ -323,6 +325,7 @@ class SettingsPage(QWidget):
         )
         about.setOpenExternalLinks(True)
         about.setTextFormat(Qt.RichText)
+        about.setWordWrap(True)
         outer.addWidget(about)
 
     def _make_link_row(self, title: str, hint: str, on_click) -> tuple[QHBoxLayout, QLabel]:
@@ -331,12 +334,19 @@ class SettingsPage(QWidget):
         row.setSpacing(8)
         text_block = QVBoxLayout()
         text_block.setSpacing(2)
-        text_block.addWidget(QLabel(title))
+        title_lbl = QLabel(title)
+        title_lbl.setWordWrap(True)
+        text_block.addWidget(title_lbl)
         hint_lbl = QLabel(hint)
         hint_lbl.setObjectName("dim")
+        hint_lbl.setWordWrap(True)
         text_block.addWidget(hint_lbl)
         row.addLayout(text_block, stretch=1)
         btn = QPushButton("Открыть")
+        # Pin enough width that the QSS padding doesn't truncate the label
+        # ("Открыт" instead of "Открыть") — Qt's sizeHint doesn't account
+        # for QSS padding.
+        btn.setMinimumWidth(96)
         btn.clicked.connect(on_click)
         row.addWidget(btn)
         return row, hint_lbl
