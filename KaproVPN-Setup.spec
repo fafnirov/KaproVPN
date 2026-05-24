@@ -11,16 +11,14 @@ copies KaproVPN.exe to %LOCALAPPDATA%\\Programs\\KaproVPN, creates Start
 Menu + Desktop shortcuts, registers an uninstaller. No admin required.
 """
 import glob
-from pathlib import Path
 
-ROOT = Path('.').resolve()
-
-# The main KaproVPN.exe payload — must exist when this spec runs.
-PAYLOAD = ROOT / 'dist' / 'KaproVPN.exe'
-if not PAYLOAD.is_file():
-    raise SystemExit(
-        f"Missing {PAYLOAD}. Build it first with `pyinstaller KaproVPN.spec`."
-    )
+# Note: we deliberately do NOT embed dist/KaproVPN.exe here any more.
+# Doing so doubled the installer's download size to ~100 MB. Instead,
+# the installer downloads KaproVPN.exe from the matching GitHub release
+# at install time (see installer/operations.py). Keeps the Setup.exe
+# under ~45 MB at the cost of requiring internet during install.
+# (Acceptable — VPN client; if you can't reach github.com you wouldn't
+# get far anyway.)
 
 # Optional designer assets — bundled if present, fall back to app icons.
 installer_pngs = [
@@ -32,9 +30,6 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        # The exe being installed.
-        (str(PAYLOAD), 'payload'),
-
         # Reuse main-app brand assets (icon, splash) inside the installer
         # so the welcome page can display them without us duplicating files.
         ('kapro_vpn/data', 'kapro_vpn/data'),

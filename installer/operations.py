@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
+import requests
+
 from . import paths
 
 
@@ -23,21 +25,69 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 # --- file operations ------------------------------------------------------
 
-def copy_main_exe(progress: ProgressCb = None) -> Path:
-    """Copy the bundled KaproVPN.exe payload to the install dir."""
-    src = paths.bundled_main_exe()
-    if not src.is_file():
-        raise FileNotFoundError(
-            f"KaproVPN.exe payload missing inside the installer: {src}"
-        )
+def acquire_main_exe(version: str, progress: ProgressCb = None) -> Path:
+    """Get KaproVPN.exe into the install dir.
+
+    Order of preference:
+      1. Locally embedded payload (if anyone re-enables the embed in the
+         spec — keeps offline-installer scenarios working).
+      2. GitHub Releases download of the matching version tag.
+
+    Range 5..50 of the overall progress is reserved for this step.
+    """
     target_dir = paths.install_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
     target = paths.installed_exe_path()
+
+    embedded = paths.bundled_main_exe()
+    if embedded is not None:
+        if progress:
+            progress(f"Копирую {embedded.name}…", 20)
+        shutil.copy2(embedded, target)
+        if progress:
+            progress(f"Скопировано {target.stat().st_size // (1024 * 1024)} МБ", 50)
+        return target
+
+    return _download_main_exe(version, target, progress)
+
+
+def _download_main_exe(version: str, target: Path,
+                       progress: ProgressCb = None) -> Path:
+    url = paths.github_release_exe_url(version)
     if progress:
-        progress(f"Копирую {src.name}…", 20)
-    shutil.copy2(src, target)
+        progress(f"Скачиваю KaproVPN.exe v{version}…", 5)
+    try:
+        with requests.get(url, stream=True, timeout=(15, 30)) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("Content-Length", 0))
+            downloaded = 0
+            last_pct = 5
+            with open(target, "wb") as f:
+                for chunk in r.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if not (progress and total):
+                        continue
+                    # Map download progress to the 5..50 slice of overall.
+                    pct = 5 + int(downloaded * 45 / total)
+                    if pct == last_pct:
+                        continue
+                    last_pct = pct
+                    mb = downloaded // (1024 * 1024)
+                    total_mb = total // (1024 * 1024)
+                    progress(
+                        f"Скачиваю KaproVPN.exe… {mb} / {total_mb} МБ",
+                        pct,
+                    )
+    except requests.RequestException as e:
+        raise RuntimeError(
+            f"Не удалось скачать KaproVPN.exe с GitHub:\n{e}\n\n"
+            "Проверь интернет и доступ к github.com."
+        ) from e
     if progress:
-        progress(f"Скопировано {target.stat().st_size // 1024} КБ", 40)
+        progress(f"Скачано {target.stat().st_size // (1024 * 1024)} МБ", 50)
     return target
 
 
@@ -239,7 +289,7 @@ def install_everything(version: str, progress: ProgressCb = None,
         progress("Создаю папку установки…", 5)
     paths.install_dir().mkdir(parents=True, exist_ok=True)
 
-    copy_main_exe(progress=progress)
+    acquire_main_exe(version, progress=progress)
 
     if progress:
         progress("Копирую uninstaller…", 55)

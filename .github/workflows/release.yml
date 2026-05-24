@@ -60,18 +60,26 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/KaproVPN-Setup.exe
+          # Both files are uploaded: Setup.exe is what users download,
+          # KaproVPN.exe is the payload the installer fetches at install
+          # time. Listing it second in the assets keeps Setup.exe on top.
+          files: |
+            dist/KaproVPN-Setup.exe
+            dist/KaproVPN.exe
           generate_release_notes: true
           body: |
             ## KaproVPN ${{ github.ref_name }}
 
             ### ⬇ Скачать
 
-            **[`KaproVPN-Setup.exe`](../../releases/download/${{ github.ref_name }}/KaproVPN-Setup.exe)** — установщик, ~100 МБ.
+            **[`KaproVPN-Setup.exe`](../../releases/download/${{ github.ref_name }}/KaproVPN-Setup.exe)** — установщик (~45 МБ).
 
             Скачал → запустил → пара кликов → программа в меню Пуск,
             ярлык на рабочем столе, запись в Programs & Features.
             Без прав администратора (ставится в `%LOCALAPPDATA%\Programs\KaproVPN\`).
+
+            > Установщик во время работы скачает основной `KaproVPN.exe` (~54 МБ)
+            > с этой же страницы релиза. Нужен интернет на момент установки.
 
             Только Windows 10/11 (x64). Для TUN-режима (туннелировать ВСЕ
             приложения — ТГ, Steam, игры) — запускай от админа после установки.

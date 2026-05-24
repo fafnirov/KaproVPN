@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 APP_NAME = "KaproVPN"
@@ -35,16 +36,22 @@ def desktop_dir() -> Path:
     return Path.home() / "Desktop"
 
 
-def bundled_main_exe() -> Path:
-    """Where the to-be-installed KaproVPN.exe lives inside *this* installer.
+def bundled_main_exe() -> Optional[Path]:
+    """If a KaproVPN.exe is embedded with the installer, return its path.
 
-    PyInstaller places `--add-data` files under `sys._MEIPASS` at runtime,
-    under the original sub-path. In dev (not frozen), we look in the
-    repo's `dist/` so a local `pyinstaller KaproVPN.spec` run produces a
-    real file to install from.
+    We dropped embedding in v0.1.4 — the installer downloads the matching
+    KaproVPN.exe from the GitHub release at install time instead — but
+    keep this lookup around in case anyone re-enables embed via the spec
+    file (or runs the dev/unfrozen flow with a local dist/KaproVPN.exe).
+    Returns None when no local payload is available.
     """
     if getattr(sys, "frozen", False):
-        base = Path(sys._MEIPASS) / "payload"
+        candidate = Path(sys._MEIPASS) / "payload" / APP_EXE_NAME
     else:
-        base = Path(__file__).resolve().parent.parent / "dist"
-    return base / APP_EXE_NAME
+        candidate = Path(__file__).resolve().parent.parent / "dist" / APP_EXE_NAME
+    return candidate if candidate.is_file() else None
+
+
+def github_release_exe_url(version: str) -> str:
+    """Direct download URL for KaproVPN.exe attached to a tagged release."""
+    return f"https://github.com/fafnirov/KaproVPN/releases/download/v{version}/{APP_EXE_NAME}"

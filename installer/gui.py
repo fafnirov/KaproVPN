@@ -83,51 +83,54 @@ class WelcomePage(QWidget):
         super().__init__(parent)
         self.setObjectName("page")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 36, 40, 32)
+        layout.setContentsMargins(40, 28, 40, 28)
         layout.setSpacing(0)
 
-        # Hero image — prefer installer/hero.png if present, fall back to splash
-        hero_widget = self._build_hero()
+        # Hero image — prefer installer/hero.png if present, fall back to
+        # splash. If we used the splash fallback, it already has the
+        # "KaproVPN" wordmark baked in, so skip the title label below to
+        # avoid the visible "KaproVPN / KaproVPN" duplication.
+        hero_widget, hero_has_text = self._build_hero()
         layout.addWidget(hero_widget, alignment=Qt.AlignHCenter)
-        layout.addSpacing(20)
+        layout.addSpacing(18)
 
-        title = QLabel("KaproVPN")
-        title.setObjectName("h1")
-        title.setAlignment(Qt.AlignHCenter)
-        layout.addWidget(title)
-        layout.addSpacing(4)
+        if not hero_has_text:
+            title = QLabel("KaproVPN")
+            title.setObjectName("h1")
+            title.setAlignment(Qt.AlignHCenter)
+            layout.addWidget(title)
+            layout.addSpacing(4)
 
-        version_label = QLabel(f"v{__version__} · установка")
+        version_label = QLabel(f"Установщик · v{__version__}")
         version_label.setObjectName("muted")
         version_label.setAlignment(Qt.AlignHCenter)
         layout.addWidget(version_label)
-        layout.addSpacing(16)
+        layout.addSpacing(20)
 
         blurb = QLabel(
-            "Десктопный VPN-клиент со встроенным split-routing'ом для "
-            "российских сайтов. Будет установлен в твой пользовательский "
-            "профиль — права администратора не нужны."
+            "Десктопный VPN-клиент со split-routing'ом для российских "
+            "сайтов. Установится в твой пользовательский профиль — "
+            "права администратора не нужны."
         )
         blurb.setObjectName("muted")
         blurb.setWordWrap(True)
         blurb.setAlignment(Qt.AlignHCenter)
         layout.addWidget(blurb)
-        layout.addSpacing(20)
+        layout.addStretch(1)
 
         self.desktop_check = QCheckBox("Создать ярлык на Рабочем столе")
         self.desktop_check.setChecked(True)
         layout.addWidget(self.desktop_check, alignment=Qt.AlignHCenter)
-
-        layout.addStretch(1)
+        layout.addSpacing(14)
 
         install_btn = QPushButton("Установить")
         install_btn.setObjectName("primary")
-        install_btn.setMinimumHeight(40)
+        install_btn.setMinimumHeight(44)
         install_btn.clicked.connect(
             lambda: self.install_clicked.emit(self.desktop_check.isChecked())
         )
         layout.addWidget(install_btn)
-        layout.addSpacing(8)
+        layout.addSpacing(10)
 
         footer = QLabel(
             f"<span style='color:#71717a; font-size:8pt'>"
@@ -141,20 +144,24 @@ class WelcomePage(QWidget):
         footer.setAlignment(Qt.AlignHCenter)
         layout.addWidget(footer)
 
-    def _build_hero(self) -> QWidget:
-        """Hero artwork from installer/hero.png, fall back to splash logo."""
+    def _build_hero(self) -> tuple[QWidget, bool]:
+        """Return (widget, has_baked_text).
+
+        `has_baked_text` is True when the fallback splash is used — its
+        PNG already contains the "KaproVPN" wordmark, so the caller
+        should skip rendering its own title label.
+        """
         hero = _asset_path("hero.png")
-        if not hero.is_file():
-            # Fall back to main-app splash (always available)
-            pix = app_icons.splash_pixmap(280)
-        else:
-            pix = QPixmap(str(hero)).scaledToWidth(
-                380, Qt.SmoothTransformation,
-            )
         lbl = QLabel()
-        lbl.setPixmap(pix)
         lbl.setAlignment(Qt.AlignHCenter)
-        return lbl
+        if hero.is_file():
+            pix = QPixmap(str(hero)).scaledToWidth(380, Qt.SmoothTransformation)
+            lbl.setPixmap(pix)
+            return (lbl, False)
+        # Fallback: splash has KaproVPN wordmark baked in.
+        pix = app_icons.splash_pixmap(220)
+        lbl.setPixmap(pix)
+        return (lbl, True)
 
 
 class InstallingPage(QWidget):
@@ -273,7 +280,10 @@ class InstallerWindow(QMainWindow):
             "KaproVPN — Удаление" if uninstall_mode else "KaproVPN — Установка"
         )
         self.setWindowIcon(app_icons.app_icon())
-        self.setFixedSize(480, 620)
+        # Roomier than the cramped 620 — the welcome page has hero +
+        # title + version + blurb + checkbox + button + footer and the
+        # extra 80 px lets it breathe.
+        self.setFixedSize(520, 700)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowMinimizeButtonHint)
 
         shell = QWidget()
