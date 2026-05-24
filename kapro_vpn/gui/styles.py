@@ -178,13 +178,19 @@ QPushButton#circleBtn[state="connected"]:pressed {{
 /* --- icon buttons (nav bar, card chevron) --- */
 
 QPushButton#iconBtn {{
+    /* Force Segoe UI Symbol — Segoe UI Emoji would render ⌂/⚙ as
+       colored emoji even with U+FE0E in some Qt builds. */
+    font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
     background-color: transparent;
     border: none;
     border-radius: 8px;
-    padding: 10px;
-    font-size: 16pt;
+    padding: 8px 0;
+    font-size: 18pt;
+    font-weight: 400;
     color: {TEXT_MUTED};
-    min-width: 48px;
+    min-width: 56px;
+    min-height: 44px;
+    max-height: 44px;
 }}
 
 QPushButton#iconBtn:hover {{

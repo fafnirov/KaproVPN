@@ -212,38 +212,54 @@ class IconButton(QPushButton):
 
 
 class NavBar(QWidget):
-    """Bottom navigation: Home / Settings / Add."""
+    """Bottom navigation: Home / Settings / Add.
+
+    All three glyphs use the U+FE0E text-style variation selector so
+    Windows doesn't render any of them as a color emoji (the gear was
+    coming through bold and purple-grey, the others as thin outlines).
+    """
 
     home_clicked = Signal()
     settings_clicked = Signal()
     add_clicked = Signal()
 
+    # ︎ forces text-presentation form for any character that has an
+    # emoji variant. Gear and house both have one; "+" doesn't, but it's
+    # harmless on chars without an emoji form.
+    HOME_GLYPH = "⌂︎"      # ⌂ HOUSE
+    SETTINGS_GLYPH = "⚙︎"  # ⚙ GEAR
+    ADD_GLYPH = "+"                  # plain ASCII plus, scales better than ＋
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(0, 4, 0, 4)
         layout.setSpacing(0)
 
-        self.btn_home = IconButton("⌂", "Главная")
-        self.btn_settings = IconButton("⚙", "Настройки")
-        self.btn_add = IconButton("＋", "Добавить конфиг")
+        self.btn_home = IconButton(self.HOME_GLYPH, "Главная")
+        self.btn_settings = IconButton(self.SETTINGS_GLYPH, "Настройки")
+        self.btn_add = IconButton(self.ADD_GLYPH, "Добавить конфиг")
 
         self.btn_home.clicked.connect(self.home_clicked)
         self.btn_settings.clicked.connect(self.settings_clicked)
         self.btn_add.clicked.connect(self.add_clicked)
 
-        layout.addStretch(1)
-        layout.addWidget(self.btn_home)
-        layout.addStretch(1)
-        layout.addWidget(self.btn_settings)
-        layout.addStretch(1)
-        layout.addWidget(self.btn_add)
-        layout.addStretch(1)
+        # Three equal columns — perfect visual alignment regardless of
+        # window width. Stretch wrappers under each button centre them.
+        for btn in (self.btn_home, self.btn_settings, self.btn_add):
+            cell = QWidget()
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.addStretch(1)
+            cell_layout.addWidget(btn)
+            cell_layout.addStretch(1)
+            layout.addWidget(cell, stretch=1)
 
     def set_active(self, name: str) -> None:
-        """name ∈ {'home', 'settings'}"""
+        """name ∈ {'home', 'settings', 'add'}"""
         self.btn_home.set_active(name == "home")
         self.btn_settings.set_active(name == "settings")
+        self.btn_add.set_active(name == "add")
 
 
 class StatusLabel(QLabel):

@@ -34,6 +34,7 @@ from ..core.controller import ConnectionError as VPNConnectionError
 from ..core.controller import ConnectionManager
 from ..core.parser import ProxyConfig
 from . import icons
+from .add_page import AddConfigPage
 from .config_dialog import AddConfigDialog
 from .configs_picker import ConfigsPickerDialog
 from .installer_dialog import ensure_geoip_ru_cached, ensure_tun2socks_installed, ensure_xray_installed
@@ -592,9 +593,11 @@ class MainWindow(QMainWindow):
         self.home_page = HomePage()
         self.settings_page = SettingsPage(self.manager)
         self.logs_page = LogsPage()
+        self.add_page = AddConfigPage()
         self.stack.addWidget(self.home_page)     # index 0
         self.stack.addWidget(self.settings_page) # index 1
         self.stack.addWidget(self.logs_page)     # index 2
+        self.stack.addWidget(self.add_page)      # index 3
         root.addWidget(self.stack, stretch=1)
 
         nav_sep = QFrame()
@@ -632,9 +635,12 @@ class MainWindow(QMainWindow):
             lambda: self._start_update_check(interactive=True)
         )
         self.logs_page.back_clicked.connect(lambda: self._goto("settings"))
+        self.add_page.back_clicked.connect(lambda: self._goto("home"))
+        self.add_page.config_ready.connect(self._on_add_page_saved)
+        self.add_page.subscription_clicked.connect(self._on_import_subscription)
         self.nav.home_clicked.connect(lambda: self._goto("home"))
         self.nav.settings_clicked.connect(lambda: self._goto("settings"))
-        self.nav.add_clicked.connect(self._on_add_config)
+        self.nav.add_clicked.connect(self._on_open_add_page)
         self.log_received.connect(self.logs_page.append)
         # Title-bar window controls (frameless mode)
         self.titlebar.minimize_clicked.connect(self.showMinimized)
@@ -652,6 +658,9 @@ class MainWindow(QMainWindow):
         elif name == "settings":
             self.stack.setCurrentIndex(1)
             self.nav.set_active("settings")
+        elif name == "add":
+            self.stack.setCurrentIndex(3)
+            self.nav.set_active("add")
 
     # --- state helpers ----------------------------------------------------
 
@@ -890,13 +899,13 @@ class MainWindow(QMainWindow):
                 self._active_config = self.configs[0] if self.configs else None
         self._refresh_home()
 
-    def _on_add_config(self) -> None:
-        dlg = AddConfigDialog(self)
-        if dlg.exec() != AddConfigDialog.Accepted:
-            return
-        new_cfg = dlg.result_config()
-        if new_cfg is None:
-            return
+    def _on_open_add_page(self) -> None:
+        """Nav-bar '+' switches to the inline AddConfigPage."""
+        self.add_page.reset()
+        self._goto("add")
+
+    def _on_add_page_saved(self, new_cfg: ProxyConfig) -> None:
+        """User filled out AddConfigPage and clicked Save."""
         for i, c in enumerate(self.configs):
             if c.name == new_cfg.name:
                 self.configs[i] = new_cfg
