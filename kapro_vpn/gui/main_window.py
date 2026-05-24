@@ -153,7 +153,7 @@ class HomePage(QWidget):
     def refresh_sites_count(self) -> None:
         sites_count = len(storage.load_sites())
         self._info_label.setText(
-            f"<span style='color:#a1a1aa'>Российские сайты — </span>"
+            f"<span style='color:#a1a1aa'>Прямые сайты — </span>"
             f"<span style='color:#fafafa'>{sites_count}</span> "
             f"<span style='color:#a1a1aa'>доменов идут напрямую</span>"
         )
@@ -347,7 +347,7 @@ class SettingsPage(QWidget):
 
         # --- Sites editor link ---
         sites_row, self._sites_count_label = self._make_link_row(
-            "Российские сайты (всегда напрямую)",
+            "Прямые сайты (всегда напрямую)",
             f"{len(storage.load_sites())} доменов",
             self.sites_clicked.emit,
         )

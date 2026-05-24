@@ -277,7 +277,7 @@ def _linux_enable(minimized: bool) -> bool:
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=KaproVPN\n"
-        "Comment=VPN client with split routing for Russian sites\n"
+        "Comment=VPN client with split routing\n"
         f"Exec={exec_cmd}\n"
         "Icon=kaprovpn\n"
         "Terminal=false\n"

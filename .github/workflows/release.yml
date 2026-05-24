@@ -79,7 +79,7 @@ jobs:
               [Desktop Entry]
               Type=Application
               Name=KaproVPN
-              Comment=VPN client with split routing for Russian sites
+              Comment=VPN client with split routing
               Exec=kaprovpn
               Icon=kaprovpn
               Categories=Network;

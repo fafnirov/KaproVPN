@@ -7,7 +7,8 @@
 
 [English](README.md) · [Русский](README.ru.md)
 
-Desktop proxy client (Windows) with built-in **split routing for Russian sites**.
+Desktop proxy client (Windows, macOS, Linux) with built-in **split routing
+via a customisable direct-list**.
 Built on top of [Xray-core](https://github.com/XTLS/Xray-core).
 
 ---
@@ -28,17 +29,17 @@ Once installed, right-click the shortcut → "Run as administrator" for TUN mode
 ## What it does
 
 A GUI for proxy/VPN connections (Trojan, VLESS with REALITY and XHTTP, VMess,
-Shadowsocks) with one extra trick: domains in a configurable list — Russian
-banks, government services, marketplaces, etc. — bypass the proxy and go
-directly through your real IP. Everything else routes through the proxy server.
+Shadowsocks) with one extra trick: domains in a configurable list bypass the
+proxy and connect directly through your real IP. Everything else routes
+through the proxy server.
 
 ## Why
 
-When a user in Russia connects through a foreign proxy, services like Sberbank,
-gosuslugi.ru, Ozon and many others refuse to work — they geofence to Russian
-IPs. Switching the VPN off every time you need to pay a bill is annoying.
-This tool keeps the proxy on for the open Internet and lets Russian services
-see your real address.
+When you connect through a foreign proxy, some services refuse to work because
+they geofence to a specific country (banks, government portals, marketplaces).
+Switching the VPN off every time you need to use one is annoying. This tool
+keeps the proxy on for the open Internet and lets the sites in your direct
+list see your real address.
 
 ## Features
 

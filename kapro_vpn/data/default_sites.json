@@ -1,5 +1,5 @@
 {
-  "description": "Domains that always bypass the proxy and use the direct (Russian) IP. xray's `domain:` rule matches the entry AND all subdomains, so 'yandex.ru' covers mail.yandex.ru, music.yandex.ru, etc.",
+  "description": "Domains that always bypass the proxy and connect via the real IP. xray's `domain:` rule matches the entry AND all subdomains, so 'example.com' covers mail.example.com, sub.example.com, etc.",
   "sites": [
     "gosuslugi.ru",
     "gu-st.ru",

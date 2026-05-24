@@ -149,7 +149,7 @@ def create_start_menu_shortcut() -> Path:
     _create_shortcut(
         target=paths.installed_exe_path(),
         lnk_path=lnk,
-        description="Desktop VPN client with split routing for Russian sites",
+        description="Desktop VPN client with split-routing direct list",
         icon=paths.installed_exe_path(),
     )
     return lnk
@@ -160,7 +160,7 @@ def create_desktop_shortcut() -> Path:
     _create_shortcut(
         target=paths.installed_exe_path(),
         lnk_path=lnk,
-        description="Desktop VPN client with split routing for Russian sites",
+        description="Desktop VPN client with split-routing direct list",
         icon=paths.installed_exe_path(),
     )
     return lnk

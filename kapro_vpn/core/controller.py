@@ -335,9 +335,9 @@ class ConnectionManager:
                 self._log(f"[*] Добавляю {len(ru_cidrs)} CIDR'ов из geoip:ru…")
                 t0 = time.time()
                 added = session.add_bypass_cidrs(ru_cidrs, real.gateway, real.index, metric=bypass_metric)
-                self._log(f"[*] Добавлено {added} CIDR'ов за {time.time()-t0:.1f}с — российский IP-космос идёт мимо TUN")
+                self._log(f"[*] Добавлено {added} CIDR'ов за {time.time()-t0:.1f}с — локальный IP-блок идёт мимо TUN")
             else:
-                self._log("[!] geoip:ru не закеширован — российские сайты с динамическими IP могут не работать")
+                self._log("[!] CIDR-список не закеширован — прямые сайты с динамическими IP могут не работать")
         except Exception:
             session.restore()
             self.tun_process.stop()

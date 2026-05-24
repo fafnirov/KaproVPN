@@ -20,7 +20,7 @@ class SitesDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Российские сайты (всегда напрямую)")
+        self.setWindowTitle("Прямые сайты (всегда напрямую)")
         self.resize(520, 600)
 
         layout = QVBoxLayout(self)
@@ -28,7 +28,7 @@ class SitesDialog(QDialog):
         layout.addWidget(QLabel(
             "Эти домены всегда идут напрямую через твой реальный IP, "
             "минуя прокси.\nПо одному домену в строке. Поддомены покрываются "
-            "автоматически (ozon.ru → m.ozon.ru, seller.ozon.ru, и т.д.)."
+            "автоматически (example.com → m.example.com, sub.example.com, и т.д.)."
         ))
 
         self.editor = QPlainTextEdit()

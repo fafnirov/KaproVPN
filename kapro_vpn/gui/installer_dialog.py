@@ -91,15 +91,15 @@ def ensure_tun2socks_installed(parent) -> bool:
 
 
 def ensure_geoip_ru_cached(parent) -> bool:
-    """Download Russian IP CIDR list if missing. For TUN-mode split routing.
+    """Download the local-IP CIDR list if missing. For TUN-mode split routing.
 
     Soft requirement — if the download fails, TUN mode still works for
-    domains we pre-resolved, just without comprehensive RU coverage.
+    domains we pre-resolved, just without comprehensive CIDR coverage.
     """
     if geoip_ru.is_cached():
         return True
     return _run_download(
-        parent, "geoip:ru CIDR list", geoip_ru.download,
+        parent, "CIDR-список прямых сайтов", geoip_ru.download,
         f"Скачай вручную:\n{geoip_ru.GEOIP_RU_URL}\n"
         f"и сохрани как:\n{geoip_ru.cache_file()}",
     ) and geoip_ru.is_cached()

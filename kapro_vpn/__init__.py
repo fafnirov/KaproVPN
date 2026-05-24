@@ -1,2 +1,2 @@
-"""KaproVPN — proxy client with split routing for Russian sites."""
-__version__ = "1.1.0"
+"""KaproVPN — proxy client with split routing via a customizable direct-list."""
+__version__ = "1.1.1"
