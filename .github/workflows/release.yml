@@ -46,35 +46,35 @@ jobs:
         run: |
           Get-ChildItem dist/ | Format-Table Name, Length
 
-      - name: Upload artifacts (for manual runs)
+      - name: Upload artifact (for manual runs)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: KaproVPN-${{ github.sha }}
-          path: |
-            dist/KaproVPN.exe
-            dist/KaproVPN-Setup.exe
+          name: KaproVPN-Setup-${{ github.sha }}
+          # Only ship the installer publicly. The portable KaproVPN.exe
+          # is still built (the installer embeds it), but isn't uploaded.
+          path: dist/KaproVPN-Setup.exe
           if-no-files-found: error
 
       - name: Attach to GitHub Release (tag pushes)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/KaproVPN.exe
-            dist/KaproVPN-Setup.exe
+          files: dist/KaproVPN-Setup.exe
           generate_release_notes: true
           body: |
             ## KaproVPN ${{ github.ref_name }}
 
-            ### ⬇ Что качать
+            ### ⬇ Скачать
 
-            - **`KaproVPN-Setup.exe`** — установщик (~110 МБ). Скачал → запустил → пара кликов → программа в Пуске.
-              Создаёт ярлыки, регистрируется в Programs & Features. Стандартный путь для большинства пользователей.
-            - **`KaproVPN.exe`** — портативная версия (~57 МБ). Без установки — скачал, запустил, программа работает.
-              Подходит если не хочешь ничего ставить (запуск с флешки и т.д.).
+            **[`KaproVPN-Setup.exe`](../../releases/download/${{ github.ref_name }}/KaproVPN-Setup.exe)** — установщик, ~100 МБ.
 
-            Только Windows 10/11 (x64). Для TUN-режима (туннелировать ВСЕ приложения — ТГ, Steam, игры) запускай от админа.
+            Скачал → запустил → пара кликов → программа в меню Пуск,
+            ярлык на рабочем столе, запись в Programs & Features.
+            Без прав администратора (ставится в `%LOCALAPPDATA%\Programs\KaproVPN\`).
+
+            Только Windows 10/11 (x64). Для TUN-режима (туннелировать ВСЕ
+            приложения — ТГ, Steam, игры) — запускай от админа после установки.
 
             Auto-built by GitHub Actions from the `${{ github.ref_name }}` tag commit.
 

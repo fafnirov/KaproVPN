@@ -14,9 +14,14 @@
 
 ### ⬇️ Скачать
 
-Готовый **[`KaproVPN.exe`](https://github.com/fafnirov/KaproVPN/releases/latest)**
-(~57 МБ, Windows x64, Python не нужен) — скачал → запустил. Для TUN-режима
-(туннелировать всё включая Telegram/Steam/игры) — запускай от админа.
+**[`KaproVPN-Setup.exe`](https://github.com/fafnirov/KaproVPN/releases/latest)**
+(~100 МБ, Windows x64, Python не нужен). Запускаешь — открывается наш
+установщик с тёмной темой: Welcome → Install → Done. Создаёт ярлыки в
+Пуске и на Рабочем столе, регистрируется в Programs & Features.
+Ставится в `%LOCALAPPDATA%\Programs\KaproVPN\` — без прав администратора.
+
+После установки — правый клик по ярлыку → «Запуск от имени администратора»
+для TUN-режима (туннелировать всё включая Telegram/Steam/игры).
 
 ---
 
@@ -60,10 +65,10 @@ Shadowsocks) с одной важной фичей: домены из настр
 
 ## Установка и запуск
 
-### Вариант 1 — готовый exe (рекомендую)
+### Вариант 1 — установщик (рекомендую)
 
-Скачай **[`KaproVPN.exe`](https://github.com/fafnirov/KaproVPN/releases/latest)**,
-запусти. Всё.
+Скачай **[`KaproVPN-Setup.exe`](https://github.com/fafnirov/KaproVPN/releases/latest)**,
+запусти, нажми «Установить». Всё.
 
 ### Вариант 2 — из исходников (для разработки / contributions)
 
@@ -74,12 +79,12 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Или собрать свой .exe локально:
+Или собрать свой установщик локально:
 
 ```bash
 pip install -r requirements-build.txt
-pyinstaller KaproVPN.spec
-# → dist/KaproVPN.exe
+pyinstaller KaproVPN.spec          # → dist/KaproVPN.exe (портативная, встраивается в установщик)
+pyinstaller KaproVPN-Setup.spec    # → dist/KaproVPN-Setup.exe (финальный установщик)
 ```
 
 При первом запуске приложение скачает последний релиз Xray-core в

@@ -14,9 +14,14 @@ Built on top of [Xray-core](https://github.com/XTLS/Xray-core).
 
 ### ⬇️ Download
 
-Grab the latest **[`KaproVPN.exe`](https://github.com/fafnirov/KaproVPN/releases/latest)** (~57 MB,
-Windows x64, no Python required) and run it. Right-click → "Run as administrator"
-for TUN mode (tunnels every app — Telegram, Steam, games — through the proxy).
+Grab the latest **[`KaproVPN-Setup.exe`](https://github.com/fafnirov/KaproVPN/releases/latest)**
+(~100 MB, Windows x64, no Python required). Run it — branded installer
+walks you through: Welcome → Install → Done. Creates Start Menu and
+Desktop shortcuts, registers in Programs & Features. Installs per-user
+to `%LOCALAPPDATA%\Programs\KaproVPN\` — no admin required for install.
+
+Once installed, right-click the shortcut → "Run as administrator" for TUN mode
+(tunnels every app — Telegram, Steam, games — through the proxy).
 
 ---
 
@@ -60,10 +65,10 @@ see your real address.
 
 ## Install & run
 
-### Option 1 — Pre-built binary (recommended)
+### Option 1 — Installer (recommended)
 
-Download **[`KaproVPN.exe`](https://github.com/fafnirov/KaproVPN/releases/latest)**,
-run it. Done.
+Download **[`KaproVPN-Setup.exe`](https://github.com/fafnirov/KaproVPN/releases/latest)**,
+run it, click Install. Done.
 
 ### Option 2 — From source (for development / contributing)
 
@@ -74,12 +79,12 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Or, to build your own .exe locally:
+Or, to build your own installer locally:
 
 ```bash
 pip install -r requirements-build.txt
-pyinstaller KaproVPN.spec
-# → dist/KaproVPN.exe
+pyinstaller KaproVPN.spec          # → dist/KaproVPN.exe (portable, embedded into installer)
+pyinstaller KaproVPN-Setup.spec    # → dist/KaproVPN-Setup.exe (final installer)
 ```
 
 On first launch the app downloads the latest Xray-core release into
