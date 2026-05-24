@@ -4,7 +4,15 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+)
+from PySide6.QtWidgets import QGraphicsOpacityEffect
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -39,6 +47,7 @@ from .config_dialog import AddConfigDialog
 from .configs_picker import ConfigsPickerDialog
 from .installer_dialog import ensure_geoip_ru_cached, ensure_tun2socks_installed, ensure_xray_installed
 from .sites_dialog import SitesDialog
+from .sparkline import TrafficSparkline
 from .titlebar import TitleBar
 from .toast import show_toast
 from .tray import TrayManager
@@ -89,6 +98,13 @@ class HomePage(QWidget):
         layout.addSpacing(6)
         layout.addWidget(self.traffic_label)
 
+        # Sparkline graph — 1-minute history of bandwidth, shown under the
+        # numbers when connected. Hidden when idle.
+        self.sparkline = TrafficSparkline()
+        self.sparkline.setVisible(False)
+        layout.addSpacing(4)
+        layout.addWidget(self.sparkline)
+
         layout.addStretch(1)
 
         # Info row about split routing
@@ -109,6 +125,8 @@ class HomePage(QWidget):
         self.status_label.set_state(state, detail)
         if state != "connected":
             self.traffic_label.clear()
+            self.sparkline.setVisible(False)
+            self.sparkline.reset()
 
     def set_traffic(self, up_rate: float, down_rate: float,
                     up_total: int, down_total: int) -> None:
@@ -125,6 +143,8 @@ class HomePage(QWidget):
             f"за сессию: ↑ {format_bytes(up_total)}  ·  ↓ {format_bytes(down_total)}"
             f"</span>"
         )
+        self.sparkline.setVisible(True)
+        self.sparkline.add_sample(up_rate, down_rate)
 
     def set_config(self, cfg: Optional[ProxyConfig]) -> None:
         self.config_card.set_config(cfg)
@@ -629,7 +649,7 @@ class MainWindow(QMainWindow):
         self.home_page.connect_clicked.connect(self._on_connect_click)
         self.home_page.card_clicked.connect(self._on_open_picker)
         self.settings_page.sites_clicked.connect(self._on_edit_sites)
-        self.settings_page.logs_clicked.connect(lambda: self.stack.setCurrentIndex(2))
+        self.settings_page.logs_clicked.connect(lambda: self._goto("logs"))
         self.settings_page.subscription_clicked.connect(self._on_import_subscription)
         self.settings_page.check_updates_requested.connect(
             lambda: self._start_update_check(interactive=True)
@@ -652,15 +672,44 @@ class MainWindow(QMainWindow):
         self.tray.config_selected.connect(self._on_tray_config_picked)
 
     def _goto(self, name: str) -> None:
-        if name == "home":
-            self.stack.setCurrentIndex(0)
-            self.nav.set_active("home")
-        elif name == "settings":
-            self.stack.setCurrentIndex(1)
-            self.nav.set_active("settings")
-        elif name == "add":
-            self.stack.setCurrentIndex(3)
-            self.nav.set_active("add")
+        target_index, nav_key = {
+            "home":     (0, "home"),
+            "settings": (1, "settings"),
+            "logs":     (2, None),     # no nav highlight for logs
+            "add":      (3, "add"),
+        }.get(name, (0, "home"))
+        if target_index == self.stack.currentIndex():
+            return
+        self._fade_to(target_index)
+        if nav_key is not None:
+            self.nav.set_active(nav_key)
+
+    def _fade_to(self, target_index: int) -> None:
+        """Crossfade-style page transition: fade in the incoming widget."""
+        target = self.stack.widget(target_index)
+        # Clear any previous opacity effect on the same widget
+        if isinstance(target.graphicsEffect(), QGraphicsOpacityEffect):
+            target.setGraphicsEffect(None)
+        effect = QGraphicsOpacityEffect(target)
+        effect.setOpacity(0.0)
+        target.setGraphicsEffect(effect)
+
+        self.stack.setCurrentIndex(target_index)
+
+        anim = QPropertyAnimation(effect, b"opacity", target)
+        anim.setDuration(180)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        # Drop the effect once the fade completes so it doesn't sit on the
+        # widget forever (effects break some QPainter operations).
+        def cleanup():
+            if target.graphicsEffect() is effect:
+                target.setGraphicsEffect(None)
+        anim.finished.connect(cleanup)
+        anim.start()
+        # Keep a reference so the GC doesn't collect mid-animation.
+        self._last_page_anim = anim
 
     # --- state helpers ----------------------------------------------------
 
@@ -844,23 +893,26 @@ class MainWindow(QMainWindow):
                               interactive: bool) -> None:
         msg = f"Доступна KaproVPN v{info.version}"
         self.settings_page.set_update_status(
-            f"{msg} — клик откроет GitHub", accent=True,
+            f"{msg} — клик чтобы обновить", accent=True,
         )
-        show_toast(
-            self,
-            f"{msg}. Открыть GitHub?",
-            kind="info",
-            duration_ms=8000,
-        )
-        # Replace the button's behaviour: now it opens the release page
+        # Hook the Settings "Update" button to the in-app updater dialog.
         try:
             self.settings_page.check_updates_btn.clicked.disconnect()
         except (TypeError, RuntimeError):
             pass
-        self.settings_page.check_updates_btn.setText("Открыть GitHub")
+        self.settings_page.check_updates_btn.setText(f"Обновить до v{info.version}")
         self.settings_page.check_updates_btn.clicked.connect(
-            lambda: self._open_release_url(info.url)
+            lambda _checked=False, i=info: self._open_updater(i)
         )
+        # Toast nudge — only on background check; if user explicitly
+        # asked, the Settings banner is already telling them.
+        if not interactive:
+            show_toast(
+                self,
+                f"{msg} — открой Настройки чтобы обновить одним кликом",
+                kind="info",
+                duration_ms=8000,
+            )
 
     def _on_no_update(self, interactive: bool) -> None:
         if interactive:
@@ -868,10 +920,11 @@ class MainWindow(QMainWindow):
                 f"У тебя последняя версия (v{__version__})", accent=False,
             )
 
-    def _open_release_url(self, url: str) -> None:
-        import webbrowser
-        if url:
-            webbrowser.open(url)
+    def _open_updater(self, info: "updater.UpdateInfo") -> None:
+        """Open the in-app updater. Handles download + silent install."""
+        from .updater_dialog import UpdaterDialog
+        dlg = UpdaterDialog(info, parent=self)
+        dlg.exec()
 
     def trigger_autoconnect(self) -> None:
         """Called from main.py shortly after launch if autoconnect_on_launch is on."""
@@ -945,10 +998,61 @@ class MainWindow(QMainWindow):
         self._refresh_home()
         show_toast(
             self,
-            f"Импорт: +{added} новых, ↻{replaced} обновлено",
+            f"Импорт: +{added} новых, ↻{replaced} обновлено · "
+            f"пингую серверы…",
             kind="success",
             duration_ms=4000,
         )
+        # Auto-pick the fastest server out of what we just imported.
+        # Done in background — toast appears when the sweep finishes.
+        self._auto_pick_fastest(imported)
+
+    def _auto_pick_fastest(self, candidates: list[ProxyConfig]) -> None:
+        """TCP-ping each candidate; once all results in, switch to min-latency."""
+        if not candidates:
+            return
+        from .configs_picker import _PingerThread
+        results: dict[str, Optional[int]] = {}
+
+        def on_pinged(name: str, ms) -> None:
+            results[name] = ms
+
+        def on_finished() -> None:
+            valid = [(n, ms) for n, ms in results.items() if ms is not None]
+            if not valid:
+                show_toast(
+                    self, "Ни один из импортированных серверов не отвечает",
+                    kind="error", duration_ms=5000,
+                )
+                return
+            fastest_name, fastest_ms = min(valid, key=lambda x: x[1])
+            cfg = next((c for c in self.configs if c.name == fastest_name), None)
+            if cfg is None:
+                return
+            # Don't yank the user's active server if they're already
+            # connected — they explicitly picked it. Just notify.
+            if self.manager.is_connected():
+                show_toast(
+                    self,
+                    f"Самый быстрый: {fastest_name[:40]} ({fastest_ms} мс). "
+                    f"Сменишь сам.",
+                    kind="info", duration_ms=6000,
+                )
+                return
+            self._active_config = cfg
+            self.manager.update_settings(last_config_name=cfg.name)
+            self._refresh_home()
+            short = fastest_name[:40] + ("…" if len(fastest_name) > 40 else "")
+            show_toast(
+                self,
+                f"Выбран самый быстрый: {short} ({fastest_ms} мс)",
+                kind="success", duration_ms=6000,
+            )
+
+        self._autopick_pinger = _PingerThread(candidates, parent=self)
+        self._autopick_pinger.pinged.connect(on_pinged)
+        self._autopick_pinger.finished.connect(on_finished)
+        self._autopick_pinger.start()
 
     def _on_edit_sites(self) -> None:
         dlg = SitesDialog(self)

@@ -1,7 +1,9 @@
 """Installer UI — frameless, dark, same theme as the main app."""
 from __future__ import annotations
 
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -454,4 +456,117 @@ def run(uninstall: bool = False) -> int:
 
     window = InstallerWindow(uninstall_mode=uninstall)
     window.show()
+    return app.exec()
+
+
+# --- silent (auto-update) mode --------------------------------------------
+
+class _SilentUpdateWindow(QMainWindow):
+    """Tiny always-on-top indicator shown during silent auto-update.
+
+    No buttons, no titlebar — just a card with logo, "Обновляю..."
+    text and an indeterminate progress bar so the user knows
+    something is happening between "main app quit" and "new app
+    launched".
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("KaproVPN — обновление")
+        self.setWindowIcon(app_icons.app_icon())
+        self.setFixedSize(360, 130)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+
+        shell = QWidget()
+        shell.setObjectName("appShell")
+        self.setCentralWidget(shell)
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        row = QHBoxLayout()
+        icon = QLabel()
+        icon.setPixmap(app_icons.app_icon().pixmap(48, 48))
+        row.addWidget(icon)
+        row.addSpacing(8)
+
+        text_col = QVBoxLayout()
+        title = QLabel("Обновляю KaproVPN…")
+        title.setObjectName("h2")
+        text_col.addWidget(title)
+        self.status_label = QLabel("Подготовка…")
+        self.status_label.setObjectName("muted")
+        text_col.addWidget(self.status_label)
+        row.addLayout(text_col, stretch=1)
+        layout.addLayout(row)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(6)
+        layout.addWidget(self.progress)
+
+        # Centre on the primary screen
+        from PySide6.QtGui import QGuiApplication
+        screen = QGuiApplication.primaryScreen().geometry()
+        self.move(
+            (screen.width() - self.width()) // 2,
+            (screen.height() - self.height()) // 2,
+        )
+
+    def set_progress(self, text: str, percent: int) -> None:
+        self.status_label.setText(text)
+        self.progress.setValue(percent)
+
+
+def run_silent() -> int:
+    """Headless install used by the in-app auto-updater."""
+    from PySide6.QtWidgets import QApplication
+
+    # Wait a beat so the calling KaproVPN.exe finishes shutting down
+    # and Windows releases its file handles. Without this we get an
+    # ERROR_SHARING_VIOLATION when copy_main_exe tries to overwrite
+    # the running exe.
+    time.sleep(1.5)
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("KaproVPN Updater")
+    app.setOrganizationName("KaproVPN")
+    app.setStyleSheet(DARK_QSS)
+    app.setWindowIcon(app_icons.app_icon())
+
+    window = _SilentUpdateWindow()
+    window.show()
+
+    worker = _InstallWorker(version=__version__, create_desktop=False, parent=window)
+    worker.progress.connect(window.set_progress)
+
+    def on_done() -> None:
+        # Relaunch the newly-installed app, then exit ourselves.
+        exe = paths.installed_exe_path()
+        if exe.is_file():
+            try:
+                subprocess.Popen(
+                    [str(exe)],
+                    creationflags=(
+                        getattr(subprocess, "DETACHED_PROCESS", 0)
+                        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    ),
+                    close_fds=True,
+                )
+            except OSError:
+                pass
+        QApplication.quit()
+
+    def on_failed(msg: str) -> None:
+        window.set_progress(f"Ошибка: {msg}", 0)
+        # Leave the window up for 5 s so the user can see what happened
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(5000, QApplication.quit)
+
+    worker.finished_ok.connect(on_done)
+    worker.failed.connect(on_failed)
+    worker.start()
+
     return app.exec()
