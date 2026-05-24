@@ -6,10 +6,18 @@ PowerShell cmdlet. All operations need admin privileges.
 Session pattern: callers build up a list of routes/DNS changes through
 RouteSession, then `restore()` undoes them all at disconnect (or atexit if
 the app crashes).
+
+Bypass-route batch: split-tunneling in TUN mode requires bypass routes for
+every "direct" domain so the kernel sends those packets out the real
+interface before they ever reach the TUN. There can be hundreds of these,
+and 500 `subprocess.run` calls take ~30 s; we batch them through a single
+PowerShell invocation instead.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
+import socket
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -169,14 +177,42 @@ class RouteSession:
             self.routes.append(_RouteEntry(dest, mask, gateway))
         return ok
 
+    def add_bypass_routes(self, ips: list[str], gateway: str, if_index: int,
+                          metric: int = 1) -> int:
+        """Add many host-routes (/32) in a single PowerShell call.
+
+        Used to keep direct-list domain IPs from looping through the TUN —
+        the kernel sends them straight out the real interface instead.
+        Returns the number of routes added.
+        """
+        ips = sorted({ip for ip in ips if ip})  # dedupe
+        if not ips:
+            return 0
+        lines = [
+            f"route add {ip} mask 255.255.255.255 {gateway} "
+            f"if {if_index} metric {metric} | Out-Null"
+            for ip in ips
+        ]
+        script = "\n".join(lines)
+        _ps(script, timeout=120.0)
+        for ip in ips:
+            self.routes.append(_RouteEntry(ip, "255.255.255.255", gateway))
+        return len(ips)
+
     def set_dns(self, iface_name: str, servers: list[str]) -> None:
         set_dns(iface_name, servers)
         self.dns_changed.append(_DnsEntry(iface_name))
 
     def restore(self) -> None:
-        for r in reversed(self.routes):
+        # Batch-delete via PowerShell — `subprocess.run` per route is ~30 ms
+        # of pure overhead, which adds up to >10 s for a few hundred routes.
+        if self.routes:
+            lines = [
+                f"route delete {r.dest} mask {r.mask} | Out-Null"
+                for r in reversed(self.routes)
+            ]
             try:
-                delete_route(r.dest, r.mask, r.gateway)
+                _ps("\n".join(lines), timeout=120.0)
             except Exception:
                 pass
         self.routes.clear()
@@ -186,3 +222,29 @@ class RouteSession:
             except Exception:
                 pass
         self.dns_changed.clear()
+
+
+# --- domain resolution (for building bypass-route list) -------------------
+
+def resolve_domains_parallel(domains: list[str], workers: int = 32,
+                             timeout: float = 3.0) -> dict[str, list[str]]:
+    """Resolve domains to IPv4 addresses concurrently.
+
+    Returns {domain: [ips]}, with empty list for domains that fail to resolve.
+    Used at TUN-mode connect-time to know which IPs need bypass routes.
+    """
+    def _resolve_one(d: str) -> tuple[str, list[str]]:
+        try:
+            socket.setdefaulttimeout(timeout)
+            infos = socket.getaddrinfo(d, None, socket.AF_INET)
+            return d, sorted({info[4][0] for info in infos})
+        except (socket.gaierror, socket.timeout, OSError):
+            return d, []
+        finally:
+            socket.setdefaulttimeout(None)
+
+    results: dict[str, list[str]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for domain, ips in ex.map(_resolve_one, domains):
+            results[domain] = ips
+    return results

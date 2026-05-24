@@ -77,21 +77,35 @@ def _fetch_tun2socks_release() -> ReleaseInfo:
     )
 
 
-def _download(url: str, progress: ProgressCb, total_offset: int = 0) -> bytes:
-    """Download to memory, calling progress with (bytes_done, bytes_total) deltas."""
-    buf = io.BytesIO()
-    downloaded = 0
-    with requests.get(url, stream=True, timeout=30) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("Content-Length", 0))
-        for chunk in r.iter_content(chunk_size=64 * 1024):
-            if not chunk:
+def _download(url: str, progress: ProgressCb, total_offset: int = 0,
+              attempts: int = 3) -> bytes:
+    """Download to memory with per-chunk read timeout and retries.
+
+    The tuple `timeout=(connect_s, read_s)` makes `requests` raise if any
+    single chunk read stalls for more than `read_s` seconds, which is the
+    failure mode we hit when GitHub's CDN goes silent under throttling.
+    """
+    last_err: Optional[Exception] = None
+    for attempt in range(attempts):
+        try:
+            buf = io.BytesIO()
+            downloaded = 0
+            with requests.get(url, stream=True, timeout=(10, 20)) as r:
+                r.raise_for_status()
+                total = int(r.headers.get("Content-Length", 0))
+                for chunk in r.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    buf.write(chunk)
+                    downloaded += len(chunk)
+                    if progress:
+                        progress(total_offset + downloaded, total_offset + total)
+            return buf.getvalue()
+        except (requests.exceptions.RequestException, OSError) as e:
+            last_err = e
+            if attempt < attempts - 1:
                 continue
-            buf.write(chunk)
-            downloaded += len(chunk)
-            if progress:
-                progress(total_offset + downloaded, total_offset + total)
-    return buf.getvalue()
+    raise RuntimeError(f"Не удалось скачать после {attempts} попыток: {last_err}")
 
 
 def _install_tun2socks(progress: ProgressCb) -> None:

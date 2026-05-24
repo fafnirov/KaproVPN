@@ -72,21 +72,33 @@ def fetch_latest_release() -> ReleaseInfo:
 
 
 def download_and_install(progress: ProgressCb = None) -> None:
-    """Download latest Xray-core zip, extract xray.exe + geo data files."""
+    """Download latest Xray-core zip, extract xray.exe + geo data files.
+
+    Per-chunk read timeout (20 s) + 3 retries — survives the case where a
+    throttled CDN starts a download but stops sending bytes mid-stream.
+    """
     release = fetch_latest_release()
-    with requests.get(release.url, stream=True, timeout=30) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("Content-Length", 0))
-        buf = io.BytesIO()
-        downloaded = 0
-        for chunk in r.iter_content(chunk_size=64 * 1024):
-            if not chunk:
-                continue
-            buf.write(chunk)
-            downloaded += len(chunk)
-            if progress:
-                progress(downloaded, total)
-        buf.seek(0)
+    raw: bytes = b""
+    for attempt in range(3):
+        try:
+            sink = io.BytesIO()
+            downloaded = 0
+            with requests.get(release.url, stream=True, timeout=(10, 20)) as r:
+                r.raise_for_status()
+                total = int(r.headers.get("Content-Length", 0))
+                for chunk in r.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    sink.write(chunk)
+                    downloaded += len(chunk)
+                    if progress:
+                        progress(downloaded, total)
+            raw = sink.getvalue()
+            break
+        except (requests.exceptions.RequestException, OSError) as e:
+            if attempt == 2:
+                raise RuntimeError(f"Не удалось скачать Xray-core после 3 попыток: {e}") from e
+    buf = io.BytesIO(raw)
 
     install_dir = paths.xray_dir()
     with zipfile.ZipFile(buf) as zf:

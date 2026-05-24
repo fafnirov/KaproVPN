@@ -31,6 +31,7 @@ class ConnectionManager:
     """Single source of truth for the connect/disconnect lifecycle."""
 
     def __init__(self, on_log: Optional[Callable[[str], None]] = None):
+        self._on_log = on_log
         self.process = XrayProcess(on_log=on_log)
         self.tun_process = Tun2socksProcess(
             on_log=(lambda l: on_log(f"[tun2socks] {l}")) if on_log else None,
@@ -42,6 +43,10 @@ class ConnectionManager:
         # Belt-and-braces: if Python exits uncleanly with TUN routes active,
         # the user's network is broken until reboot. Best-effort cleanup here.
         atexit.register(self._atexit_cleanup)
+
+    def _log(self, msg: str) -> None:
+        if self._on_log:
+            self._on_log(msg)
 
     # --- public API -------------------------------------------------------
 
@@ -188,6 +193,29 @@ class ConnectionManager:
 
             # DNS via TUN so resolution doesn't leak to ISP.
             session.set_dns(tun.name, TUN_DNS)
+
+            # Split-routing in TUN mode: xray's freedom outbound can't be
+            # trusted alone because its outgoing packets still hit the kernel
+            # routing table, which currently sends everything to TUN — that
+            # means freedom -> TCP -> kernel -> TUN -> tun2socks -> xray ->
+            # freedom -> ... infinite loop, manifesting as a connection
+            # timeout to the user. The fix is the same trick AmneziaVPN uses:
+            # resolve every direct-list domain and pin /32 bypass routes for
+            # the resulting IPs via the real gateway. The kernel then dodges
+            # the TUN entirely for that traffic.
+            if direct_domains:
+                self._log(f"[*] Резолвлю {len(direct_domains)} доменов из списка direct…")
+                domain_ips = network_routes.resolve_domains_parallel(direct_domains)
+                all_ips = [ip for ips in domain_ips.values() for ip in ips]
+                resolved = sum(1 for ips in domain_ips.values() if ips)
+                failed = len(direct_domains) - resolved
+                self._log(
+                    f"[*] Резолв: {resolved}/{len(direct_domains)} доменов, "
+                    f"{len(set(all_ips))} уникальных IP"
+                    + (f" (не резолвнулось: {failed})" if failed else "")
+                )
+                added = session.add_bypass_routes(all_ips, real.gateway, real.index)
+                self._log(f"[*] Добавлено {added} bypass-роутов (direct-сайты идут мимо TUN)")
         except Exception:
             session.restore()
             self.tun_process.stop()
