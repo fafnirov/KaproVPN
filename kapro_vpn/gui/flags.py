@@ -1,7 +1,7 @@
 """Country code / flag-emoji helpers for config cards and pickers.
 
 Most VPN providers prefix server names with a 2-letter country code —
-"NL BMV2 Medium · VLESS ...", "RU Spb · trojan", "[DE] Frankfurt".
+"NL Server · VLESS ...", "RU SPB · trojan", "[DE] Frankfurt".
 We pluck that prefix and render the corresponding Unicode flag.
 
 If we can't find a country code in the name, falls back to "" — the UI

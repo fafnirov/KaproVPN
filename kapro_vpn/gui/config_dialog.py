@@ -37,7 +37,7 @@ class AddConfigDialog(QDialog):
 
         self.url_edit = QPlainTextEdit()
         self.url_edit.setPlaceholderText(
-            "trojan://1eb7503f-...@host.example:28193?security=tls&sni=...#Имя"
+            "trojan://<password>@host.example:443?security=tls&sni=host.example#Name"
         )
         layout.addWidget(self.url_edit, stretch=1)
 
