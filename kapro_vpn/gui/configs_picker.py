@@ -199,7 +199,15 @@ class ConfigsPickerDialog(QDialog):
 
     def _on_add(self) -> None:
         dlg = AddConfigDialog(self)
-        if dlg.exec() != AddConfigDialog.Accepted:
+        rc = dlg.exec()
+        # Auto-redirect: if the user pasted a subscription URL into the
+        # "add single config" form, AddConfigDialog asks them whether to
+        # switch and bails with this sentinel. We open the subscription
+        # dialog pre-filled so they don't have to paste again.
+        if rc == AddConfigDialog.SWITCH_TO_SUBSCRIPTION:
+            self._on_import_subscription(prefill_url=dlg.pending_subscription_url())
+            return
+        if rc != AddConfigDialog.Accepted:
             return
         new_cfg = dlg.result_config()
         if new_cfg is None:
@@ -215,8 +223,8 @@ class ConfigsPickerDialog(QDialog):
         self._current_name = new_cfg.name
         self._refresh()
 
-    def _on_import_subscription(self) -> None:
-        dlg = SubscriptionDialog(self)
+    def _on_import_subscription(self, prefill_url: Optional[str] = None) -> None:
+        dlg = SubscriptionDialog(self, prefill_url=prefill_url)
         if dlg.exec() != SubscriptionDialog.Accepted:
             return
         imported = dlg.imported_configs()

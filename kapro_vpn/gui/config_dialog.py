@@ -65,11 +65,38 @@ class AddConfigDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    # Result code returned via QDialog.done() when the user picks
+    # "Open subscription import instead". The parent (configs_picker)
+    # watches for this to swap dialogs without bothering the user with
+    # a second click.
+    SWITCH_TO_SUBSCRIPTION = 100
+
     def _on_parse(self) -> None:
         text = self.url_edit.toPlainText().strip()
         if not text:
             QMessageBox.warning(self, "Пусто", "Сначала вставь URL.")
             return
+
+        # http(s)://-URL ≠ share-URL. The most common mistake is pasting
+        # a provider's subscription URL here instead of into "Импорт по
+        # подписке". Offer to switch dialogs in one click.
+        if text.lower().startswith(("http://", "https://")):
+            choice = QMessageBox.question(
+                self, "Похоже на URL подписки",
+                "Это ссылка на сайт провайдера, а не share-URL "
+                "конкретного сервера (vless:// / trojan:// / vmess://).\n\n"
+                "Открыть «Импорт по подписке» — KaproVPN сам скачает "
+                "список серверов по этой ссылке?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if choice == QMessageBox.Yes:
+                # Stash the URL so the caller can pre-fill the subscription
+                # dialog without making the user paste again.
+                self._pending_subscription_url = text
+                self.done(self.SWITCH_TO_SUBSCRIPTION)
+            return
+
         try:
             cfg = parse(text)
         except ParseError as e:
@@ -82,6 +109,12 @@ class AddConfigDialog(QDialog):
             f"Протокол: {cfg.protocol} · "
             f"{cfg.outbound.get('server', '?')}:{cfg.outbound.get('server_port', '?')}"
         )
+
+    def pending_subscription_url(self) -> Optional[str]:
+        """Set when the user agreed to switch to subscription import.
+        configs_picker reads this to pre-fill the subscription dialog.
+        """
+        return getattr(self, "_pending_subscription_url", None)
 
     def _on_accept(self) -> None:
         if self._result is None:

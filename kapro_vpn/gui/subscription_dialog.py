@@ -65,12 +65,16 @@ class _SubscriptionFetcher(QThread):
 class SubscriptionDialog(QDialog):
     """Paste a subscription URL, fetch it, preview results, save."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, prefill_url: Optional[str] = None):
         super().__init__(parent)
         self.setWindowTitle("Импорт по подписке")
         self.resize(620, 520)
         self._result: Optional[SubscriptionResult] = None
         self._fetcher: Optional[_SubscriptionFetcher] = None
+        # If we were opened because the user pasted a subscription URL
+        # into the wrong dialog, kick off the fetch automatically after
+        # showing — they already expressed clear intent.
+        self._autostart_fetch: bool = bool(prefill_url)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -93,9 +97,11 @@ class SubscriptionDialog(QDialog):
         layout.addWidget(QLabel("URL подписки:"))
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("https://provider.example/sub/abc123")
-        # Pre-fill with the last-used URL
+        # Precedence: explicit prefill (from auto-redirect) > last-used URL
         last_url = storage.load_settings().get("subscription_url", "")
-        if last_url:
+        if prefill_url:
+            self.url_edit.setText(prefill_url)
+        elif last_url:
             self.url_edit.setText(last_url)
         layout.addWidget(self.url_edit)
 
@@ -167,6 +173,18 @@ class SubscriptionDialog(QDialog):
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def showEvent(self, event) -> None:
+        """Auto-kick the fetch when we were opened with a prefilled URL
+        (typical case: user pasted a sub URL into the wrong dialog and
+        we redirected them here). Run via QTimer.singleShot so the
+        window is fully painted before the fetcher thread starts.
+        """
+        super().showEvent(event)
+        if self._autostart_fetch:
+            self._autostart_fetch = False  # one-shot
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self._on_fetch)
 
     # --- actions ----------------------------------------------------------
 

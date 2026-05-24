@@ -126,6 +126,18 @@ class AddConfigPage(QWidget):
             self._parsed = None
             self.save_btn.setEnabled(False)
             return
+        # Friendly nudge: an http(s) URL pasted here is almost always a
+        # subscription URL that belongs in the other dialog. Don't auto-
+        # redirect (textChanged fires per-keystroke) — just hint.
+        if text.lower().startswith(("http://", "https://")):
+            self._parsed = None
+            self.status_label.setText(
+                "<span style='color:#fbbf24'>⚠ Похоже на URL подписки.</span> "
+                "<span style='color:#a1a1aa'>Жми «📥 Импорт по подписке» "
+                "ниже — это другая кнопка.</span>"
+            )
+            self.save_btn.setEnabled(False)
+            return
         try:
             cfg = parse(text)
         except ParseError as e:
