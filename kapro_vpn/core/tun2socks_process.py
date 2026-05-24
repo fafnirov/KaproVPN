@@ -33,15 +33,23 @@ TUN_DEVICE_NAME = "KaproTun" if sys.platform == "win32" else "kaprotun"
 
 
 def _device_arg() -> str:
-    """The right -device URI for our OS."""
-    if sys.platform == "win32":
-        return f"wintun://{TUN_DEVICE_NAME}"
+    """The right -device URI for our OS.
+
+    Windows: `tun://NAME` — tun2socks auto-uses WinTUN when wintun.dll
+    is alongside the binary. The seemingly-more-correct `wintun://NAME`
+    scheme exists too, but with it tun2socks doesn't always register
+    the interface under our chosen NAME — leaving `find_interface_by_name`
+    to time out. `tun://` has been the working syntax since v0.x, so
+    we stick with it.
+
+    macOS: `utun` — kernel insists on assigning utunN itself; a fixed
+    name would error. We discover the actual name later via getifaddrs.
+
+    Linux: `tun://NAME` — kernel creates the device under the name we
+    pick.
+    """
     if sys.platform == "darwin":
-        # macOS kernel insists on naming utunN itself; passing a fixed
-        # name would error. Letting it pick is fine — we discover the
-        # actual name afterward via getifaddrs.
         return "utun"
-    # Linux — we choose the name and the kernel creates it.
     return f"tun://{TUN_DEVICE_NAME}"
 
 
