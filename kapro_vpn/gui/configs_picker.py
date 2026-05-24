@@ -1,9 +1,12 @@
 """Modal dialog for picking, adding, and removing proxy configs."""
 from __future__ import annotations
 
+import concurrent.futures
+import socket
+import time
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -17,7 +20,46 @@ from PySide6.QtWidgets import (
 
 from ..core import storage
 from ..core.parser import ProxyConfig
+from . import flags
 from .config_dialog import AddConfigDialog
+
+
+class _PingerThread(QThread):
+    """TCP-pings every config server in parallel and emits one result per config.
+
+    A "ping" here is a single TCP connect to (server, port) with a 3-second
+    timeout — close enough to RTT to be useful for picking a fast server,
+    without needing ICMP privileges or a real proxy handshake.
+    """
+    pinged = Signal(str, object)  # config name, latency_ms (int) or None
+
+    def __init__(self, configs: list[ProxyConfig], parent=None):
+        super().__init__(parent)
+        self._configs = configs
+
+    def run(self) -> None:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            futures = {ex.submit(self._ping_one, c): c for c in self._configs}
+            for fut in concurrent.futures.as_completed(futures):
+                cfg = futures[fut]
+                try:
+                    ms = fut.result()
+                except Exception:
+                    ms = None
+                self.pinged.emit(cfg.name, ms)
+
+    @staticmethod
+    def _ping_one(cfg: ProxyConfig) -> Optional[int]:
+        server = cfg.outbound.get("server")
+        port = cfg.outbound.get("server_port")
+        if not server or not port:
+            return None
+        try:
+            t0 = time.monotonic()
+            with socket.create_connection((server, int(port)), timeout=3.0):
+                return int((time.monotonic() - t0) * 1000)
+        except (socket.gaierror, OSError):
+            return None
 
 
 class ConfigsPickerDialog(QDialog):
@@ -36,18 +78,27 @@ class ConfigsPickerDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Выбор конфига")
-        self.resize(420, 520)
+        self.resize(440, 540)
         self._configs = list(configs)
         self._current_name = current_name
         self._chosen: Optional[ProxyConfig] = None
+        self._pings: dict[str, Optional[int]] = {}  # name -> ms (None = unreachable)
+        self._pinger: Optional[_PingerThread] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
+        header_row = QHBoxLayout()
         title = QLabel("Конфиги")
         title.setObjectName("h2")
-        layout.addWidget(title)
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+        self.refresh_ping_btn = QPushButton("↻ Пинг")
+        self.refresh_ping_btn.setToolTip("Перепроверить задержку до каждого сервера")
+        self.refresh_ping_btn.clicked.connect(self._start_pings)
+        header_row.addWidget(self.refresh_ping_btn)
+        layout.addLayout(header_row)
 
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
@@ -79,22 +130,62 @@ class ConfigsPickerDialog(QDialog):
         layout.addLayout(bottom_row)
 
         self._refresh()
+        self._start_pings()
 
     # --- helpers ----------------------------------------------------------
 
     def _refresh(self) -> None:
         self.list_widget.clear()
         for cfg in self._configs:
-            srv = cfg.outbound.get("server", "?")
-            port = cfg.outbound.get("server_port", "?")
-            label = f"{cfg.name}\n{cfg.protocol.upper()}  ·  {srv}:{port}"
-            item = QListWidgetItem(label)
+            item = QListWidgetItem(self._format_item(cfg))
             item.setData(Qt.UserRole, cfg)
             self.list_widget.addItem(item)
             if cfg.name == self._current_name:
                 self.list_widget.setCurrentItem(item)
         if self.list_widget.currentRow() < 0 and self._configs:
             self.list_widget.setCurrentRow(0)
+
+    def _format_item(self, cfg: ProxyConfig) -> str:
+        srv = cfg.outbound.get("server", "?")
+        port = cfg.outbound.get("server_port", "?")
+        # Ping suffix is in the protocol line: known ms / "недоступен" / "…"
+        ping_value = self._pings.get(cfg.name, "pending")
+        if ping_value == "pending":
+            ping_str = "…"
+        elif ping_value is None:
+            ping_str = "недоступен"
+        else:
+            ping_str = f"{ping_value} мс"
+        return (
+            f"{flags.prefix_with_flag(cfg)}\n"
+            f"{cfg.protocol.upper()}  ·  {srv}:{port}  ·  {ping_str}"
+        )
+
+    # --- pinger lifecycle -------------------------------------------------
+
+    def _start_pings(self) -> None:
+        if self._pinger is not None and self._pinger.isRunning():
+            return  # already running
+        # Reset all to "pending" so the UI shows progress
+        for cfg in self._configs:
+            self._pings[cfg.name] = "pending"
+        self._refresh_list_text()
+        self.refresh_ping_btn.setEnabled(False)
+        self._pinger = _PingerThread(self._configs, parent=self)
+        self._pinger.pinged.connect(self._on_pinged)
+        self._pinger.finished.connect(lambda: self.refresh_ping_btn.setEnabled(True))
+        self._pinger.start()
+
+    def _on_pinged(self, name: str, ms) -> None:
+        self._pings[name] = ms
+        self._refresh_list_text()
+
+    def _refresh_list_text(self) -> None:
+        """Update each list item's label in place (no row rebuild)."""
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            cfg = item.data(Qt.UserRole)
+            item.setText(self._format_item(cfg))
 
     def _selected_index(self) -> int:
         return self.list_widget.currentRow()

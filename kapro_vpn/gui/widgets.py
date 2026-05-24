@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.parser import ProxyConfig
-from . import styles
+from . import flags, styles
 
 
 class CircleConnectButton(QPushButton):
@@ -182,7 +182,7 @@ class ConfigCard(QFrame):
             self.badge.setText("—")
             self.sub.setText("Нажми, чтобы добавить конфиг")
             return
-        self.title.setText(cfg.name)
+        self.title.setText(flags.prefix_with_flag(cfg))
         self.badge.setText(cfg.protocol.upper())
         server = cfg.outbound.get("server", "?")
         port = cfg.outbound.get("server_port", "?")

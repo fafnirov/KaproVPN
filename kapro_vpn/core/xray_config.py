@@ -299,8 +299,23 @@ def build_config(
     if domain_rules:
         rules.append({"type": "field", "domain": domain_rules, "outboundTag": "direct"})
 
+    # API inbound for runtime stats (read by core/xray_stats.py via the
+    # `xray api stats` CLI helper). Routed to the dedicated `api` outbound
+    # rather than the proxy/direct ones.
+    from . import xray_stats as _stats
+
     return {
         "log": {"loglevel": log_level},
+        "stats": {},
+        "policy": {
+            "system": {
+                "statsInboundUplink": True,
+                "statsInboundDownlink": True,
+                "statsOutboundUplink": True,
+                "statsOutboundDownlink": True,
+            }
+        },
+        "api": {"tag": "api", "services": ["StatsService"]},
         "inbounds": [
             {
                 "tag": "http-in",
@@ -326,6 +341,13 @@ def build_config(
                     "routeOnly": False,
                 },
             },
+            {
+                "tag": "api-in",
+                "listen": _stats.API_LISTEN_HOST,
+                "port": _stats.API_LISTEN_PORT,
+                "protocol": "dokodemo-door",
+                "settings": {"address": _stats.API_LISTEN_HOST},
+            },
         ],
         "outbounds": [
             proxy_outbound,
@@ -334,7 +356,13 @@ def build_config(
         ],
         "routing": {
             "domainStrategy": "IPIfNonMatch",
-            "rules": rules,
+            "rules": [
+                # Route the API inbound to the API outbound BEFORE any
+                # other matching, otherwise stats queries would try to go
+                # out through the proxy and fail.
+                {"type": "field", "inboundTag": ["api-in"], "outboundTag": "api"},
+                *rules,
+            ],
         },
     }
 

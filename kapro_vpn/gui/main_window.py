@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..core import admin, storage, tun2socks_installer, xray_installer
+from ..core import admin, storage, tun2socks_installer, xray_installer, xray_stats
 from ..core.controller import MODE_HTTP_PROXY, MODE_TUN
 from ..core.controller import ConnectionError as VPNConnectionError
 from ..core.controller import ConnectionManager
@@ -35,6 +35,7 @@ from .configs_picker import ConfigsPickerDialog
 from .installer_dialog import ensure_geoip_ru_cached, ensure_tun2socks_installed, ensure_xray_installed
 from .sites_dialog import SitesDialog
 from .titlebar import TitleBar
+from .toast import show_toast
 from .tray import TrayManager
 from .widgets import CircleConnectButton, ConfigCard, NavBar, StatusLabel
 
@@ -75,6 +76,14 @@ class HomePage(QWidget):
         self.status_label = StatusLabel()
         layout.addWidget(self.status_label)
 
+        # Traffic stats — only visible while connected. RichText so we can
+        # tint the two values without nested widgets.
+        self.traffic_label = QLabel("")
+        self.traffic_label.setAlignment(Qt.AlignCenter)
+        self.traffic_label.setTextFormat(Qt.RichText)
+        layout.addSpacing(6)
+        layout.addWidget(self.traffic_label)
+
         layout.addStretch(1)
 
         # Info row about split routing
@@ -93,6 +102,24 @@ class HomePage(QWidget):
     def set_state(self, state: str, detail: str = "") -> None:
         self.circle.set_state(state)
         self.status_label.set_state(state, detail)
+        if state != "connected":
+            self.traffic_label.clear()
+
+    def set_traffic(self, up_rate: float, down_rate: float,
+                    up_total: int, down_total: int) -> None:
+        """Refresh the traffic-rate label. Called once per second."""
+        from ..core.xray_stats import format_bytes, format_rate
+        self.traffic_label.setText(
+            f"<span style='color:#a1a1aa'>↑ </span>"
+            f"<span style='color:#fafafa'>{format_rate(up_rate)}</span>"
+            f"<span style='color:#71717a'>  ·  </span>"
+            f"<span style='color:#a1a1aa'>↓ </span>"
+            f"<span style='color:#fafafa'>{format_rate(down_rate)}</span>"
+            f"<br/>"
+            f"<span style='color:#71717a; font-size:8pt'>"
+            f"за сессию: ↑ {format_bytes(up_total)}  ·  ↓ {format_bytes(down_total)}"
+            f"</span>"
+        )
 
     def set_config(self, cfg: Optional[ProxyConfig]) -> None:
         self.config_card.set_config(cfg)
@@ -385,6 +412,7 @@ class MainWindow(QMainWindow):
         self._really_quitting = False
         self._connecting = False  # True while _ConnectWorker is running
         self._connect_worker: Optional[_ConnectWorker] = None
+        self._prev_traffic: Optional[xray_stats.TrafficStats] = None
 
         # --- App-shell layout (everything inside the rounded dark frame) ---
         shell = QWidget()
@@ -492,12 +520,31 @@ class MainWindow(QMainWindow):
             mode_tag = "TUN" if self.manager.current_mode() == MODE_TUN else "HTTP"
             self.home_page.set_state("connected", f"{timer} · {mode_tag}")
             self.tray.set_state("connected", active_name)
+            self._poll_traffic()
         else:
             self.home_page.set_state("idle")
             self.tray.set_state("idle", active_name)
+            self._prev_traffic = None  # reset session counter when disconnected
 
         self.home_page.set_config(self._active_config)
         self.tray.set_configs(self.configs, active_name)
+
+    def _poll_traffic(self) -> None:
+        """Pull the latest cumulative byte counters and feed rates to HomePage."""
+        sample = xray_stats.query_stats()
+        if sample is None:
+            return
+        if self._prev_traffic is None:
+            # First sample of the session — record but don't display until we
+            # have a delta to compute rate from.
+            self._prev_traffic = sample
+            return
+        up_rate, down_rate = sample.delta_rate(self._prev_traffic)
+        self._prev_traffic = sample
+        self.home_page.set_traffic(
+            up_rate, down_rate,
+            sample.uplink_bytes, sample.downlink_bytes,
+        )
 
     # --- actions ----------------------------------------------------------
 
@@ -555,6 +602,7 @@ class MainWindow(QMainWindow):
         self.logs_page.append(
             f"[*] Подключено к «{self._active_config.name}» ({mode_tag})"
         )
+        show_toast(self, f"Подключено к «{self._active_config.name}»", kind="success")
         self._refresh_home()
 
     def _on_connect_failed(self, msg: str) -> None:
@@ -567,6 +615,7 @@ class MainWindow(QMainWindow):
         self.manager.disconnect()
         self._connected_at = 0.0
         self.logs_page.append("[*] Отключено, системный прокси восстановлен")
+        show_toast(self, "Отключено", kind="info")
         self._refresh_home()
 
     def _on_open_picker(self) -> None:
@@ -605,6 +654,7 @@ class MainWindow(QMainWindow):
         self.manager.update_settings(last_config_name=new_cfg.name)
         self._goto("home")
         self._refresh_home()
+        show_toast(self, f"Конфиг «{new_cfg.name}» добавлен", kind="success")
 
     def _on_edit_sites(self) -> None:
         dlg = SitesDialog(self)
@@ -613,10 +663,14 @@ class MainWindow(QMainWindow):
         self.home_page.refresh_sites_count()
         self.settings_page.refresh_sites_count()
         if self.manager.is_connected():
-            QMessageBox.information(
-                self, "Список обновлён",
-                "Изменения применятся при следующем подключении.",
+            show_toast(
+                self,
+                "Список сайтов обновлён. Применится при следующем подключении.",
+                kind="info",
+                duration_ms=5000,
             )
+        else:
+            show_toast(self, "Список сайтов обновлён", kind="success")
 
     # --- tray + window lifecycle ------------------------------------------
 

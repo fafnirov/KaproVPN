@@ -339,6 +339,48 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
 
+/* --- toast notifications --- */
+
+QFrame#toastInfo, QFrame#toastSuccess, QFrame#toastError {{
+    background-color: {SURFACE};
+    border-radius: 10px;
+    padding: 10px 14px;
+}}
+
+QFrame#toastInfo {{
+    border: 1px solid {ACCENT};
+}}
+
+QFrame#toastSuccess {{
+    border: 1px solid #16a34a;
+}}
+
+QFrame#toastError {{
+    border: 1px solid {DANGER};
+}}
+
+QLabel#toastText {{
+    color: {TEXT};
+    font-size: 9pt;
+    background: transparent;
+}}
+
+QLabel#toastIcon {{
+    font-size: 13pt;
+    font-weight: 700;
+    color: {ACCENT};
+    background: transparent;
+    padding-right: 4px;
+}}
+
+QFrame#toastSuccess QLabel#toastIcon {{
+    color: #16a34a;
+}}
+
+QFrame#toastError QLabel#toastIcon {{
+    color: {DANGER};
+}}
+
 /* --- separator --- */
 
 QFrame[frameShape="4"] {{      /* HLine */
