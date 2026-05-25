@@ -73,8 +73,57 @@ class TrayManager(QObject):
             self.tray.setToolTip("KaproVPN — не подключено")
             self.action_toggle.setText("Подключить")
 
-    def set_configs(self, configs: list[ProxyConfig], active_name: str = "") -> None:
-        """Rebuild the configs submenu with the current saved list."""
+    def set_configs(
+        self,
+        configs: list[ProxyConfig],
+        active_name: str = "",
+        pings: Optional[dict[str, Optional[int]]] = None,
+    ) -> None:
+        """Rebuild both the quick-connect top-strip and the full submenu.
+
+        `pings` maps config name → latency in ms (None = unreachable,
+        -1 = UDP-only / skipped). Used to surface the 3 lowest-ping
+        configs at the top level so the user can switch in one click
+        without opening the main window.
+        """
+        pings = pings or {}
+
+        # --- Top-level quick-connect actions ---
+        # We rebuild these dynamically; remove old ones first by tag.
+        for act in list(self._quick_actions):
+            self.menu.removeAction(act)
+        self._quick_actions.clear()
+        if self._quick_separator is not None:
+            self.menu.removeAction(self._quick_separator)
+            self._quick_separator = None
+
+        # Pick top-3 by ping. Skip configs without a usable ping value
+        # (pending or unreachable) — quick-connect should ONLY surface
+        # servers that are definitely up.
+        rankable = []
+        for cfg in configs:
+            ms = pings.get(cfg.name)
+            if isinstance(ms, int) and ms >= 0:  # excludes None, -1
+                rankable.append((ms, cfg))
+        rankable.sort(key=lambda x: x[0])
+        top3 = rankable[:3]
+
+        if top3:
+            for ms, cfg in top3:
+                # Format: "⚡ NL BMV2 · 123 ms"
+                marker = "▶" if cfg.name == active_name else "⚡"
+                act = QAction(f"{marker} {cfg.name}  ·  {ms} мс", self.menu)
+                act.triggered.connect(
+                    lambda _checked=False, c=cfg: self.config_selected.emit(c)
+                )
+                # Insert BEFORE the toggle action so quick-connect is the
+                # very first thing in the menu.
+                self.menu.insertAction(self.action_toggle, act)
+                self._quick_actions.append(act)
+            sep = self.menu.insertSeparator(self.action_toggle)
+            self._quick_separator = sep
+
+        # --- Full configs submenu (everything saved, not just top-3) ---
         self.configs_menu.clear()
         if not configs:
             no_configs = QAction("(нет конфигов)", self.configs_menu)
@@ -82,7 +131,16 @@ class TrayManager(QObject):
             self.configs_menu.addAction(no_configs)
             return
         for cfg in configs:
-            act = QAction(cfg.name, self.configs_menu)
+            ms = pings.get(cfg.name)
+            if isinstance(ms, int) and ms >= 0:
+                label = f"{cfg.name}  ·  {ms} мс"
+            elif ms == -1:
+                label = f"{cfg.name}  ·  UDP"
+            elif ms is None:
+                label = f"{cfg.name}  ·  ?"
+            else:
+                label = cfg.name
+            act = QAction(label, self.configs_menu)
             act.setCheckable(True)
             act.setChecked(cfg.name == active_name)
             act.triggered.connect(lambda _checked=False, c=cfg: self.config_selected.emit(c))
@@ -97,6 +155,12 @@ class TrayManager(QObject):
     # --- internal ---------------------------------------------------------
 
     def _build_menu_skeleton(self) -> None:
+        # Quick-connect top-3 entries (rebuilt on every set_configs).
+        # Tracked here so we can remove them cleanly without nuking the
+        # rest of the menu.
+        self._quick_actions: list[QAction] = []
+        self._quick_separator: Optional[QAction] = None
+
         self.action_toggle = QAction("Подключить", self.menu)
         self.action_toggle.triggered.connect(self.toggle_clicked)
         self.menu.addAction(self.action_toggle)

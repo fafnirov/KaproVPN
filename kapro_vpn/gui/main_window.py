@@ -601,6 +601,12 @@ class MainWindow(QMainWindow):
         self._connected_at: float = 0.0
         self._really_quitting = False
         self._connecting = False  # True while _ConnectWorker is running
+        # Tray-menu quick-connect uses this cache to surface the 3
+        # fastest configs. Populated by a background pinger that runs
+        # once at startup + after any config-list mutation.
+        # name → latency in ms, or None (unreachable), or -1 (UDP-only).
+        self._tray_pings: dict[str, Optional[int]] = {}
+        self._tray_pinger: Optional[object] = None  # _PingerThread instance
         self._connect_worker: Optional[_ConnectWorker] = None
         self._prev_traffic: Optional[xray_stats.TrafficStats] = None
         self._update_worker: Optional[_UpdateCheckWorker] = None
@@ -642,6 +648,11 @@ class MainWindow(QMainWindow):
         self._wire_signals()
         self._refresh_home()
         self.nav.set_active("home")
+
+        # Kick off the initial tray-pings background scan so the
+        # quick-connect block appears within a few seconds of startup.
+        # Defer by 500 ms so the splash → window swap finishes first.
+        QTimer.singleShot(500, self._refresh_tray_pings)
 
         # Periodic status refresh — detects subprocess crashes and updates timer
         self._poll = QTimer(self)
@@ -730,6 +741,45 @@ class MainWindow(QMainWindow):
                 return c
         return self.configs[0] if self.configs else None
 
+    def _refresh_tray_pings(self) -> None:
+        """Re-ping every saved config in the background, then refresh the
+        tray quick-connect block with the new ordering.
+
+        Called once at startup and after every config-list mutation (add,
+        remove, subscription import). One-shot per call — no looping
+        timer; ping results don't go stale fast enough to warrant
+        background polling.
+        """
+        if not self.configs:
+            self._tray_pings = {}
+            return
+        from .configs_picker import _PingerThread
+
+        # Stop any previous pinger before starting a new one — avoids
+        # racing two pingers for the same configs.
+        if self._tray_pinger is not None:
+            try:
+                self._tray_pinger.quit()
+            except Exception:
+                pass
+
+        new_pings: dict[str, Optional[int]] = {}
+
+        def on_pinged(name: str, ms) -> None:
+            new_pings[name] = ms
+
+        def on_finished() -> None:
+            self._tray_pings = new_pings
+            # Push the new pings into the tray menu — this rebuilds the
+            # quick-connect top-3.
+            active_name = self._active_config.name if self._active_config else ""
+            self.tray.set_configs(self.configs, active_name, self._tray_pings)
+
+        self._tray_pinger = _PingerThread(list(self.configs), parent=self)
+        self._tray_pinger.pinged.connect(on_pinged)
+        self._tray_pinger.finished.connect(on_finished)
+        self._tray_pinger.start()
+
     def _refresh_home(self) -> None:
         # Don't fight the connect worker for the button state — the
         # "connecting" pulse keeps animating until the worker finishes
@@ -790,7 +840,7 @@ class MainWindow(QMainWindow):
             self._prev_traffic = None  # reset session counter when disconnected
 
         self.home_page.set_config(self._active_config)
-        self.tray.set_configs(self.configs, active_name)
+        self.tray.set_configs(self.configs, active_name, self._tray_pings)
 
     def _poll_traffic(self) -> None:
         """Pull the latest cumulative byte counters and feed rates to HomePage."""
@@ -959,6 +1009,9 @@ class MainWindow(QMainWindow):
             if self._active_config and self._active_config.name not in names:
                 self._active_config = self.configs[0] if self.configs else None
         self._refresh_home()
+        # Config list may have changed (add/remove) — re-rank for tray
+        # quick-connect block.
+        self._refresh_tray_pings()
 
     def _on_open_add_page(self) -> None:
         """Nav-bar '+' switches to the inline AddConfigPage."""
@@ -1112,12 +1165,19 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _on_tray_config_picked(self, cfg: ProxyConfig) -> None:
-        """User picked a config from the tray submenu — switch + reconnect."""
+        """User picked a config from the tray (quick-connect or submenu).
+
+        Always end up connected: if currently disconnected, just
+        connect. If already connected, disconnect first then connect
+        to the newly-picked server. This matches the tray-menu
+        affordance: clicking a server name means "I want to use this
+        server NOW".
+        """
         self._active_config = cfg
         self.manager.update_settings(last_config_name=cfg.name)
         if self.manager.is_connected():
             self._do_disconnect()
-            self._do_connect()
+        self._do_connect()
         self._refresh_home()
 
     # --- shutdown ---------------------------------------------------------
