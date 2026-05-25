@@ -2,6 +2,7 @@ package pro.kaprovpn.android
 
 import android.app.Application
 import pro.kaprovpn.android.core.AppRepository
+import pro.kaprovpn.android.vpn.SubscriptionRefreshWorker
 import pro.kaprovpn.android.vpn.XrayBridge
 
 class App : Application() {
@@ -13,5 +14,8 @@ class App : Application() {
         // Грузим сохранённые конфиги + настройки из filesDir в Flow,
         // на которые подписаны Compose-экраны.
         AppRepository.init(this)
+        // Зарегистрировать periodic-worker раз в 12 часов для refresh
+        // подписки. KEEP-policy → safe to call на каждом старте.
+        SubscriptionRefreshWorker.schedule(this)
     }
 }

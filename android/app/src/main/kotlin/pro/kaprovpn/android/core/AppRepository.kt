@@ -104,6 +104,17 @@ object AppRepository {
         updateSettings { it.copy(autoconnectOnLaunch = enabled) }
     }
 
+    fun setSubscriptionUrl(url: String?) {
+        // Trim + null-out пустые строки — иначе worker попытается fetch
+        // empty URL и упадёт на parse.
+        val cleaned = url?.trim()?.takeIf { it.isNotEmpty() }
+        updateSettings { it.copy(subscriptionUrl = cleaned) }
+    }
+
+    fun setSubscriptionAutorefresh(enabled: Boolean) {
+        updateSettings { it.copy(subscriptionAutorefresh = enabled) }
+    }
+
     /**
      * Применить мутацию к настройкам + сохранить + опубликовать в Flow.
      * Single-shot — каждая мутация перезаписывает settings.json целиком,

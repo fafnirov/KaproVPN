@@ -19,4 +19,13 @@ data class AppSettings(
 
     /** Автоподключаться при старте приложения. Default — off. */
     val autoconnectOnLaunch: Boolean = false,
+
+    /** URL последней импортированной subscription. Используется
+     *  background-worker'ом раз в 12 часов чтобы перетянуть свежий
+     *  список конфигов (провайдеры часто рос rotate'ят UUIDs/endpoints). */
+    val subscriptionUrl: String? = null,
+
+    /** Включён ли auto-refresh подписки. Default — on, чтобы новые
+     *  пользователи сразу получали свежие конфиги без ручного re-import. */
+    val subscriptionAutorefresh: Boolean = true,
 )

@@ -74,6 +74,8 @@
     <string name="settings_behavior_header">Поведение</string>
     <string name="settings_autoconnect_title">Автоподключение при запуске</string>
     <string name="settings_autoconnect_subtitle">Подключаться к активному серверу как только откроется приложение</string>
+    <string name="settings_subrefresh_title">Автообновление подписки</string>
+    <string name="settings_subrefresh_subtitle">Раз в 12 часов перетягивать свежий список с твоей последней subscription-ссылки</string>
     <string name="settings_about_header">О приложении</string>
     <string name="settings_xray_version">Xray-core: %1$s</string>
     <string name="settings_app_version">KaproVPN Android (Phase 8)</string>

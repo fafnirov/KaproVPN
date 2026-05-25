@@ -95,6 +95,9 @@ fun SubscriptionDialog(
             if (r != null && r.configs.isNotEmpty()) {
                 Button(onClick = {
                     AppRepository.addConfigs(r.configs)
+                    // Сохраняем URL чтобы background worker мог refresh'ить
+                    // его раз в 12 часов (см. SubscriptionRefreshWorker).
+                    AppRepository.setSubscriptionUrl(url.trim())
                     onAdded(r.configs.size)
                 }) {
                     Text(stringResource(R.string.sub_dialog_add_all, r.configs.size))

@@ -81,6 +81,12 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 checked = settings.autoconnectOnLaunch,
                 onCheckedChange = { AppRepository.setAutoconnect(it) },
             )
+            SettingsToggleRow(
+                title = stringResource(R.string.settings_subrefresh_title),
+                subtitle = stringResource(R.string.settings_subrefresh_subtitle),
+                checked = settings.subscriptionAutorefresh,
+                onCheckedChange = { AppRepository.setSubscriptionAutorefresh(it) },
+            )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 

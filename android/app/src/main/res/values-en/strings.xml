@@ -74,6 +74,8 @@
     <string name="settings_behavior_header">Behavior</string>
     <string name="settings_autoconnect_title">Auto-connect on launch</string>
     <string name="settings_autoconnect_subtitle">Connect to the active server as soon as the app opens</string>
+    <string name="settings_subrefresh_title">Auto-refresh subscription</string>
+    <string name="settings_subrefresh_subtitle">Re-pull the server list from your latest subscription URL every 12 hours</string>
     <string name="settings_about_header">About</string>
     <string name="settings_xray_version">Xray-core: %1$s</string>
     <string name="settings_app_version">KaproVPN Android (Phase 8)</string>

@@ -145,9 +145,22 @@
 - Build ✓. EN автоматически активируется когда устройство
   переключено на English-локаль.
 
-**Не сделано (Phase 9+):**
-- Subscription auto-refresh каждые 12 часов — WorkManager periodic
-  work (десктоп имеет в Sprint 2).
+**Phase 9 — Subscription auto-refresh (готово):**
+- `AppSettings.subscriptionUrl` + `subscriptionAutorefresh` (default
+  on) хранятся в settings.json (plain, не секрет — URL уже знает
+  провайдер) ✓
+- `vpn.SubscriptionRefreshWorker` — `CoroutineWorker`, periodic
+  каждые 12 часов с `NetworkType.CONNECTED` constraint.
+  `Result.retry` на ошибки чтобы не убивать schedule ✓
+- `App.onCreate` зовёт `SubscriptionRefreshWorker.schedule(this)` —
+  KEEP-policy, idempotent ✓
+- SubscriptionDialog сохраняет URL в `AppRepository.setSubscriptionUrl`
+  при успешном импорте → worker подхватывает на следующий tick ✓
+- SettingsScreen — toggle «Автообновление подписки» под
+  Автоподключением ✓
+- Build ✓, тесты ✓
+
+**Не сделано (Phase 10+):**
 - Kill-switch (Always-on VPN — настройка системы Android, бесплатно).
 - Ping per config + sorting.
 - Release pipeline (signing, R8/ProGuard, ABI splits).
