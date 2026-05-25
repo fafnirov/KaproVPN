@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.Copy
+import java.net.URI
 
 plugins {
     alias(libs.plugins.android.application)
@@ -69,10 +70,45 @@ val copyDefaultSitesJson by tasks.registering(Copy::class) {
 }
 
 tasks.named("preBuild") {
-    dependsOn(copyDefaultSitesJson)
+    dependsOn(copyDefaultSitesJson, downloadLibV2ray)
+}
+
+// --------------------------------------------------------------------------
+// libv2ray.aar — prebuilt Xray-core bindings из 2dust/AndroidLibXrayLite.
+//
+// Слишком тяжёлый для git (~55 MB) — gitignore'нится. Этот task скачивает
+// файл на первый build (~30 сек) и кеширует локально. На follow-up билдах —
+// no-op (UP-TO-DATE) если файл уже есть.
+//
+// Версия совпадает с тегом релиза 2dust/AndroidLibXrayLite. Обновление:
+// бумпнуть `libV2rayVersion`, удалить app/libs/libv2ray.aar, пересобрать.
+// --------------------------------------------------------------------------
+val libV2rayVersion = "v26.5.19"
+val libV2rayFile = layout.projectDirectory.file("libs/libv2ray.aar").asFile
+
+val downloadLibV2ray by tasks.registering {
+    description = "Скачать libv2ray.aar $libV2rayVersion из GitHub releases если отсутствует"
+    outputs.file(libV2rayFile)
+    doLast {
+        if (libV2rayFile.exists() && libV2rayFile.length() > 50_000_000L) {
+            logger.lifecycle("libv2ray.aar уже скачан (${libV2rayFile.length() / 1024 / 1024} MB) — skip")
+            return@doLast
+        }
+        libV2rayFile.parentFile.mkdirs()
+        val url = "https://github.com/2dust/AndroidLibXrayLite/releases/download/$libV2rayVersion/libv2ray.aar"
+        logger.lifecycle("Скачиваю libv2ray.aar $libV2rayVersion ($url)…")
+        URI(url).toURL().openStream().use { input ->
+            libV2rayFile.outputStream().use { output -> input.copyTo(output) }
+        }
+        logger.lifecycle("OK — ${libV2rayFile.length() / 1024 / 1024} MB")
+    }
 }
 
 dependencies {
+    // VPN engine — Xray-core через gomobile-сгенерированные JNI-биндинги.
+    // Файл качается downloadLibV2ray task'ом (см. выше).
+    implementation(files(libV2rayFile))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

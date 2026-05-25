@@ -22,8 +22,21 @@
 - 22 unit-теста, `./gradlew :app:testDebugUnitTest` зелёные ✓
 - `default_sites.json` синкается из `../kapro_vpn/data/` build-task'ом ✓
 
-**Дальше (Phase 2):** интеграция libXray (Go-AAR), JNI-мост, VpnService,
-hev-socks5-tunnel для TUN → SOCKS5 mapping. Это RealHard™ часть.
+**Phase 2 — libv2ray интеграция (in progress):**
+- `libv2ray.aar` v26.5.19 (2dust/AndroidLibXrayLite) подключён через
+  Gradle download-task — файл качается локально на первый build
+  (~55 MB), gitignore'нится ✓
+- `vpn.XrayBridge` — Kotlin singleton-обёртка вокруг `CoreController`:
+  `coreVersion()`, `init(context)`, state-флоу, log-флоу.
+  Полное API (start/stop/queryStats) — TODO Phase 3 ✓
+- Smoke-кнопка "Проверить Xray-core" на HomeScreen зовёт
+  `Libv2ray.checkVersionX()` через JNI — ждёт прогона на эмуляторе ✓
+- `./gradlew :app:assembleDebug` зелёный, APK 150 MB debug
+  (4 ABI + Xray-core) ✓
+
+**Дальше (Phase 3):** VpnService с TUN-fd → `CoreController.startLoop`,
+split-routing через `Builder.addRoute()` для resolved direct-IP, foreground
+notification, permission flow в MainActivity.
 
 ## Требования
 
