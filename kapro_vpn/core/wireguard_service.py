@@ -31,25 +31,50 @@ Service basename = stem of that file = our chosen tunnel name.
 """
 from __future__ import annotations
 
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
+
+import requests
 
 from . import paths
 
 # Default install path of WireGuard for Windows. Users who chose a custom
 # install location can set $WIREGUARD_EXE in their environment.
 DEFAULT_EXE = r"C:\Program Files\WireGuard\wireguard.exe"
-DOWNLOAD_URL = "https://download.wireguard.com/windows-client/wireguard-installer.exe"
+
+# Pinned MSI version we know works with our orchestration. WireGuard for
+# Windows is API-stable across versions but we pin to avoid an upstream
+# breaking change silently breaking our users. Bump after manual smoke-test.
+WIREGUARD_MSI_VERSION = "0.5.3"
+WIREGUARD_MSI_FILENAME = f"wireguard-amd64-{WIREGUARD_MSI_VERSION}.msi"
+
+# Upstream MSI URL — used as fallback if our mirror is unreachable.
+WIREGUARD_MSI_UPSTREAM = (
+    f"https://download.wireguard.com/windows-client/{WIREGUARD_MSI_FILENAME}"
+)
+# Our mirror (server-setup/sync-binaries.sh re-hosts the MSI). Primary
+# because it's geographically closer + we control its uptime.
+WIREGUARD_MSI_MIRROR = f"https://files.kaprovpn.pro/{WIREGUARD_MSI_FILENAME}"
+
+DOWNLOAD_URL = WIREGUARD_MSI_UPSTREAM  # legacy alias, kept for callers
+
+# Bypass system proxy on internal downloads — see xray_installer for
+# full rationale (stale registry proxy from crashed HTTP-mode sessions).
+_NO_PROXY = {"http": "", "https": ""}
 
 # Hidden-subprocess flag — without it Windows pops a fleeting console
 # window for every wireguard.exe call.
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+ProgressCb = Optional[Callable[[int, int], None]]
 
 
 def wg_dir() -> Path:
@@ -78,6 +103,112 @@ def find_wireguard_exe() -> Optional[Path]:
 
 def is_installed() -> bool:
     return find_wireguard_exe() is not None
+
+
+# ---------------------------------------------------------------- silent install
+
+def _download_msi(progress: ProgressCb = None) -> bytes:
+    """Fetch the WireGuard MSI: mirror first, upstream fallback.
+
+    Mirror is faster + more reliable from RU. Upstream is the safety
+    net if our VPS is down. 2 attempts per source, 4 chances total.
+    """
+    last_err: Optional[Exception] = None
+    for url in (WIREGUARD_MSI_MIRROR, WIREGUARD_MSI_UPSTREAM):
+        for attempt in range(2):
+            try:
+                sink = io.BytesIO()
+                downloaded = 0
+                with requests.get(url, stream=True, timeout=(10, 30),
+                                  proxies=_NO_PROXY) as r:
+                    r.raise_for_status()
+                    total = int(r.headers.get("Content-Length", 0))
+                    for chunk in r.iter_content(chunk_size=64 * 1024):
+                        if not chunk:
+                            continue
+                        sink.write(chunk)
+                        downloaded += len(chunk)
+                        if progress:
+                            progress(downloaded, total)
+                data = sink.getvalue()
+                # Sanity: MSI is ~5-8 MB; anything tiny is a captive-
+                # portal HTML or a broken truncated download.
+                if len(data) < 500_000:
+                    raise RuntimeError(
+                        f"Suspiciously small download ({len(data)} B) — "
+                        f"probably a 404 page or captive portal"
+                    )
+                return data
+            except (requests.exceptions.RequestException, OSError, RuntimeError) as e:
+                last_err = e
+    raise RuntimeError(
+        f"Не удалось скачать WireGuard MSI ни с зеркала, ни с upstream: {last_err}"
+    )
+
+
+def silent_install(progress: ProgressCb = None) -> None:
+    """Download WireGuard for Windows MSI and install it silently.
+
+    Requires admin (msiexec /i with /quiet on a system component needs
+    elevation). Controller has already gated on admin.is_admin() before
+    calling us, so this is safe.
+
+    Side effect: registers WireGuard as a normal Windows program (shows
+    up in Add/Remove Programs, Start Menu). KaproVPN doesn't uninstall
+    it on its own removal — the user may use it for other tunnels.
+    """
+    if sys.platform != "win32":
+        raise RuntimeError("WireGuard MSI install is Windows-only")
+
+    raw = _download_msi(progress=progress)
+
+    # Write the MSI to a temp file — msiexec needs a real path.
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".msi", prefix="kaprovpn-wg-",
+    )
+    try:
+        os.write(fd, raw)
+    finally:
+        os.close(fd)
+
+    try:
+        # /i  = install
+        # /quiet  = no UI (also blocks reboot prompt — we use /norestart anyway)
+        # /norestart = never reboot, even if MSI requests it
+        # ACCEPTEULA=1 = pre-accept the EULA (so install doesn't block on it)
+        proc = subprocess.run(
+            ["msiexec", "/i", tmp_path, "/quiet", "/norestart", "ACCEPTEULA=1"],
+            capture_output=True, timeout=180,
+            creationflags=_NO_WINDOW,
+        )
+        if proc.returncode not in (0, 3010):
+            # 3010 = "success, but a reboot is required". For WG, no
+            # reboot is actually needed for the CLI to work; the service
+            # subsystem is reachable without one.
+            raise RuntimeError(
+                f"msiexec вернул {proc.returncode}. "
+                f"stderr: {(proc.stderr or b'').decode('utf-8', errors='replace')[:200]}"
+            )
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    # Sanity-check that the install actually landed.
+    if not is_installed():
+        raise RuntimeError(
+            "MSI отработал без ошибки, но wireguard.exe всё равно не "
+            "найден на диске. Возможно, антивирус помешал — попробуй "
+            "временно выключить защиту реального времени и переподключиться."
+        )
+
+
+def ensure_installed(progress: ProgressCb = None) -> None:
+    """Idempotent: install only if missing."""
+    if is_installed():
+        return
+    silent_install(progress=progress)
 
 
 def get_installed_version() -> Optional[str]:

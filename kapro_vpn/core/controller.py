@@ -205,14 +205,24 @@ class ConnectionManager:
         from . import wireguard_service
         from .parser import wg_conf_from_raw_url
 
-        # Check that WireGuard for Windows is installed.
+        # First-launch: if WireGuard for Windows isn't installed, fetch
+        # and install the MSI silently. Takes ~10-15 seconds total.
+        # We're already admin (gated above), msiexec /quiet works clean.
+        # User just sees the spinner — never sees a third-party installer.
         if not wireguard_service.is_installed():
-            raise ConnectionError(
-                "Для WG-конфигов нужен официальный WireGuard для Windows "
-                "(10 МБ, ставится за минуту).\n\n"
-                f"Скачай: {wireguard_service.DOWNLOAD_URL}\n"
-                "Запусти установщик, потом снова жми «Подключить»."
-            )
+            self._log("[*] Первый запуск WG — скачиваю и ставлю WireGuard-runtime…")
+            try:
+                wireguard_service.ensure_installed(
+                    progress=lambda done, total: self._log(
+                        f"[*] WireGuard MSI: {done // 1024} / "
+                        f"{(total or 1) // 1024} KB"
+                    ) if total and done % (256 * 1024) < 64 * 1024 else None
+                )
+            except Exception as e:
+                raise ConnectionError(
+                    f"Не удалось установить WireGuard-runtime: {e}"
+                ) from e
+            self._log("[*] WireGuard-runtime установлен")
 
         # First-launch cleanup: remove any orphan KaproVPN-* tunnels
         # from previous crashed runs. Cheap (one `sc query`).
