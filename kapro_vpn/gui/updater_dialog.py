@@ -61,7 +61,13 @@ class _DownloadWorker(QThread):
 
     def run(self) -> None:
         try:
-            with requests.get(self._url, stream=True, timeout=(15, 30)) as r:
+            # Bypass system proxy — see core/xray_installer for full
+            # rationale. We're downloading our own installer .exe from
+            # GitHub, not pushing user traffic. A stale system proxy
+            # entry would self-perpetuate the bug (can't auto-update
+            # to a fix because the update mechanism itself fails).
+            with requests.get(self._url, stream=True, timeout=(15, 30),
+                              proxies={"http": "", "https": ""}) as r:
                 r.raise_for_status()
                 total = int(r.headers.get("Content-Length", 0))
                 downloaded = 0

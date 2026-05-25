@@ -35,6 +35,11 @@ TUN2SOCKS_PINNED_VERSION = "v2.6.0"
 WINTUN_URL = "https://www.wintun.net/builds/wintun-0.14.1.zip"
 WINTUN_DLL_IN_ZIP = "wintun/bin/amd64/wintun.dll"
 
+# Bypass system proxy on our own downloads — see xray_installer for full
+# story. TL;DR: a stale 127.0.0.1:2080 registry entry from a crashed
+# HTTP-mode session kills every GitHub fetch with WinError 10061.
+_NO_PROXY = {"http": "", "https": ""}
+
 
 def _asset_marker() -> str:
     """Return the OS-arch substring that identifies our tun2socks asset.
@@ -98,7 +103,7 @@ def get_installed_version() -> Optional[str]:
 def _fetch_tun2socks_release() -> ReleaseInfo:
     marker = _asset_marker()
     try:
-        r = requests.get(TUN2SOCKS_LATEST, timeout=10)
+        r = requests.get(TUN2SOCKS_LATEST, timeout=10, proxies=_NO_PROXY)
         r.raise_for_status()
         data = r.json()
         version = data.get("tag_name", "unknown")
@@ -127,7 +132,8 @@ def _download(url: str, progress: ProgressCb, total_offset: int = 0,
         try:
             buf = io.BytesIO()
             downloaded = 0
-            with requests.get(url, stream=True, timeout=(10, 20)) as r:
+            with requests.get(url, stream=True, timeout=(10, 20),
+                              proxies=_NO_PROXY) as r:
                 r.raise_for_status()
                 total = int(r.headers.get("Content-Length", 0))
                 for chunk in r.iter_content(chunk_size=64 * 1024):

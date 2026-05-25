@@ -57,7 +57,12 @@ def _download_main_exe(version: str, target: Path,
     if progress:
         progress(f"Скачиваю KaproVPN.exe v{version}…", 5)
     try:
-        with requests.get(url, stream=True, timeout=(15, 30)) as r:
+        # Bypass system proxy — installer runs on a fresh machine where
+        # there shouldn't be one, but if a previous KaproVPN crashed and
+        # left a stale 127.0.0.1:2080 entry in the registry, this would
+        # try to tunnel through a dead port and fail with WinError 10061.
+        with requests.get(url, stream=True, timeout=(15, 30),
+                          proxies={"http": "", "https": ""}) as r:
             r.raise_for_status()
             total = int(r.headers.get("Content-Length", 0))
             downloaded = 0

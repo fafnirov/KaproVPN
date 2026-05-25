@@ -16,6 +16,12 @@ from .. import __version__
 
 GITHUB_RELEASES_LATEST = "https://api.github.com/repos/fafnirov/KaproVPN/releases/latest"
 
+# Bypass system proxy on update checks — same reason as the installers.
+# Without this, a stale 127.0.0.1:2080 system-proxy entry from a crashed
+# HTTP-mode session makes the updater self-perpetuate the bug: user
+# can't update to a fix because the update mechanism itself fails.
+_NO_PROXY = {"http": "", "https": ""}
+
 
 @dataclass
 class UpdateInfo:
@@ -46,7 +52,8 @@ def latest_release(timeout: tuple[float, float] = (5, 10)) -> Optional[UpdateInf
     UpdateInfo can also drive a "you're on the latest version" display.
     """
     try:
-        response = requests.get(GITHUB_RELEASES_LATEST, timeout=timeout)
+        response = requests.get(GITHUB_RELEASES_LATEST, timeout=timeout,
+                                proxies=_NO_PROXY)
         response.raise_for_status()
         data = response.json()
     except (requests.exceptions.RequestException, ValueError):

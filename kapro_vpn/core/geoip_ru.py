@@ -25,6 +25,9 @@ from . import paths
 GEOIP_RU_URL = "https://www.ipdeny.com/ipblocks/data/aggregated/ru-aggregated.zone"
 MIN_VALID_FILE_BYTES = 5_000  # sanity check — actual file is ~80 KB
 
+# Bypass system proxy — see xray_installer for the full story.
+_NO_PROXY = {"http": "", "https": ""}
+
 ProgressCb = Optional[Callable[[int, int], None]]
 
 
@@ -44,7 +47,8 @@ def download(progress: ProgressCb = None, attempts: int = 3) -> None:
     for attempt in range(attempts):
         try:
             data = b""
-            with requests.get(GEOIP_RU_URL, stream=True, timeout=(10, 20)) as r:
+            with requests.get(GEOIP_RU_URL, stream=True, timeout=(10, 20),
+                              proxies=_NO_PROXY) as r:
                 r.raise_for_status()
                 total = int(r.headers.get("Content-Length", 0))
                 chunks: list[bytes] = []

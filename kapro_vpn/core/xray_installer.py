@@ -33,6 +33,15 @@ GITHUB_LATEST = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 # DNS blocked, etc.). Mirrors the asset matrix above.
 PINNED_VERSION = "v26.3.27"
 
+# Bypass system proxy — we're fetching our own deps, not user traffic.
+# Without this, a stale 127.0.0.1:2080 system proxy (left over from a
+# crashed HTTP-mode session where xray died without restoring the
+# registry) makes every GitHub download fail with WinError 10061
+# "Connection refused" because nothing's listening on that port.
+# Empty-string values explicitly override env vars AND Windows
+# registry proxy detection.
+_NO_PROXY = {"http": "", "https": ""}
+
 
 def _asset_marker() -> str:
     """Return the lowercase substring that identifies our platform's asset
@@ -92,7 +101,7 @@ def get_installed_version() -> Optional[str]:
 def fetch_latest_release() -> ReleaseInfo:
     marker = _asset_marker()
     try:
-        r = requests.get(GITHUB_LATEST, timeout=10)
+        r = requests.get(GITHUB_LATEST, timeout=10, proxies=_NO_PROXY)
         r.raise_for_status()
         data = r.json()
         version = data.get("tag_name", "unknown")
@@ -127,7 +136,8 @@ def download_and_install(progress: ProgressCb = None) -> None:
         try:
             sink = io.BytesIO()
             downloaded = 0
-            with requests.get(release.url, stream=True, timeout=(10, 20)) as r:
+            with requests.get(release.url, stream=True, timeout=(10, 20),
+                              proxies=_NO_PROXY) as r:
                 r.raise_for_status()
                 total = int(r.headers.get("Content-Length", 0))
                 for chunk in r.iter_content(chunk_size=64 * 1024):
