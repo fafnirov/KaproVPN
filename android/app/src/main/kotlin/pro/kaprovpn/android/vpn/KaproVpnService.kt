@@ -47,6 +47,8 @@ class KaproVpnService : VpnService() {
         const val ACTION_DISCONNECT = "pro.kaprovpn.android.action.DISCONNECT"
         const val EXTRA_CONFIG_JSON = "config_json"
         const val EXTRA_SESSION_NAME = "session_name"
+        const val EXTRA_DNS_PLAIN_SERVERS = "dns_plain_servers"
+        const val EXTRA_DNS_BYPASS_IPS = "dns_bypass_ips"
 
         private const val NOTIFICATION_ID = 0xC001
         private const val NOTIFICATION_CHANNEL = "vpn_status"
@@ -55,13 +57,23 @@ class KaproVpnService : VpnService() {
         private const val TUN_LOCAL_ADDR = "10.255.0.2"
         private const val TUN_PREFIX = 30
         private const val TUN_MTU = 1500
-        private val TUN_DNS = listOf("77.88.8.8", "1.1.1.1") // Yandex, Cloudflare
+        // Безопасный fallback DNS (когда пользователь не выбрал кастомный):
+        // Yandex Public + Cloudflare. Yandex первый — лучше для RU-сайтов.
+        private val DEFAULT_TUN_DNS = listOf("77.88.8.8", "1.1.1.1")
 
-        fun start(context: Context, configJson: String, sessionName: String) {
+        fun start(
+            context: Context,
+            configJson: String,
+            sessionName: String,
+            tunDnsServers: List<String> = emptyList(),
+            dnsBypassIps: List<String> = emptyList(),
+        ) {
             val intent = Intent(context, KaproVpnService::class.java).apply {
                 action = ACTION_CONNECT
                 putExtra(EXTRA_CONFIG_JSON, configJson)
                 putExtra(EXTRA_SESSION_NAME, sessionName)
+                putStringArrayListExtra(EXTRA_DNS_PLAIN_SERVERS, ArrayList(tunDnsServers))
+                putStringArrayListExtra(EXTRA_DNS_BYPASS_IPS, ArrayList(dnsBypassIps))
             }
             context.startService(intent)
         }
@@ -89,12 +101,14 @@ class KaproVpnService : VpnService() {
             ACTION_CONNECT -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG_JSON)
                 val name = intent.getStringExtra(EXTRA_SESSION_NAME) ?: "KaproVPN"
+                val tunDns = intent.getStringArrayListExtra(EXTRA_DNS_PLAIN_SERVERS).orEmpty()
+                val dnsBypassIps = intent.getStringArrayListExtra(EXTRA_DNS_BYPASS_IPS).orEmpty()
                 if (config.isNullOrBlank()) {
                     Log.e(TAG, "ACTION_CONNECT без конфига — игнорю")
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                connect(config, name)
+                connect(config, name, tunDns, dnsBypassIps)
             }
             ACTION_DISCONNECT -> {
                 Log.i(TAG, "ACTION_DISCONNECT")
@@ -110,7 +124,12 @@ class KaproVpnService : VpnService() {
         return START_NOT_STICKY
     }
 
-    private fun connect(configJson: String, sessionName: String) {
+    private fun connect(
+        configJson: String,
+        sessionName: String,
+        tunDns: List<String>,
+        dnsBypassIps: List<String>,
+    ) {
         // Перепроверка прав на всякий случай — VpnService.prepare() уже должна
         // была быть вызвана в UI, но pre-Android-13 разрешение могло истечь.
         if (prepare(this) != null) {
@@ -123,7 +142,7 @@ class KaproVpnService : VpnService() {
 
         startJob = scope.launch {
             val pfd: ParcelFileDescriptor = try {
-                buildTun(sessionName)
+                buildTun(sessionName, tunDns, dnsBypassIps)
             } catch (e: Throwable) {
                 Log.e(TAG, "TUN setup failed", e)
                 stopWithError("Не удалось создать TUN: ${e.message}")
@@ -171,17 +190,47 @@ class KaproVpnService : VpnService() {
         stopSelf()
     }
 
-    private fun buildTun(sessionName: String): ParcelFileDescriptor {
+    private fun buildTun(
+        sessionName: String,
+        tunDns: List<String>,
+        dnsBypassIps: List<String>,
+    ): ParcelFileDescriptor {
         val builder = Builder()
             .setSession(sessionName)
             .setMtu(TUN_MTU)
             .addAddress(TUN_LOCAL_ADDR, TUN_PREFIX)
             // Phase 3 MVP: туннелируем ВСЁ. Split-routing (direct-list) приедет
             // в Phase 4 — там будем резолвить direct-домены в IP и добавлять
-            // `addRoute(ip, 32)` чтобы система не отправляла их через TUN.
+            // bypass-маршруты для них.
             .addRoute("0.0.0.0", 0)
 
-        TUN_DNS.forEach { builder.addDnsServer(it) }
+        // DNS на TUN — либо выбранный пользователем (DnsOption.plainServers),
+        // либо безопасный fallback (Yandex + Cloudflare).
+        val dnsToSet = tunDns.ifEmpty { DEFAULT_TUN_DNS }
+        dnsToSet.forEach { builder.addDnsServer(it) }
+
+        // DNS bypass IPs — добавляем как НЕ-туннелируемые маршруты. Идея:
+        // если пользователь выбрал, скажем, Cloudflare DoH, то 1.1.1.1
+        // должен идти мимо туннеля (иначе DoH-over-443 от Chrome'а делает
+        // ненужный круг через VPN-сервер). Реализация Android — через
+        // exclude-routes когда мы туннелируем 0.0.0.0/0.
+        //
+        // ВНИМАНИЕ: VpnService.Builder.excludeRoute существует только с
+        // API 33 (Android 13). На минимуме нашего API 24 такой возможности
+        // нет — DNS bypass для < API 33 делается только через xray routing
+        // (см. XrayConfigBuilder, там уже всё есть). Эти exclude-routes —
+        // дополнительный слой защиты на Android 13+.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            for (ip in dnsBypassIps) {
+                try {
+                    builder.excludeRoute(android.net.IpPrefix(
+                        java.net.InetAddress.getByName(ip), 32
+                    ))
+                } catch (e: Throwable) {
+                    Log.w(TAG, "excludeRoute $ip failed", e)
+                }
+            }
+        }
 
         // Защищаемся от петли: исключаем сами себя из туннеля. Без этого
         // xray-исходящий трафик улетел бы обратно в TUN → бесконечная

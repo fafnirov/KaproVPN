@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import pro.kaprovpn.android.core.DnsOption
 import pro.kaprovpn.android.ui.HomeScreen
 import pro.kaprovpn.android.ui.theme.KaproVpnTheme
 import pro.kaprovpn.android.vpn.KaproVpnService
@@ -15,13 +16,19 @@ import pro.kaprovpn.android.vpn.KaproVpnService
 class MainActivity : ComponentActivity() {
 
     /**
-     * Pending config — то, что хотим подключить, как только пользователь
+     * Pending request — то что хотим подключить, как только пользователь
      * нажмёт «Разрешить VPN» в системном диалоге. На Android разрешение
      * выдаётся одно на навсегда (или до удаления приложения / отзыва в
      * Settings), поэтому в типичном случае мы сюда не попадаем — только
      * при первом подключении.
      */
-    private var pendingConfig: Pair<String, String>? = null
+    private data class PendingConnect(
+        val configJson: String,
+        val sessionName: String,
+        val dnsOption: DnsOption,
+    )
+
+    private var pending: PendingConnect? = null
 
     /**
      * Launcher для запроса VPN-разрешения. [VpnService.prepare] возвращает
@@ -31,23 +38,33 @@ class MainActivity : ComponentActivity() {
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val pending = pendingConfig
-        pendingConfig = null
-        if (result.resultCode == Activity.RESULT_OK && pending != null) {
-            val (configJson, sessionName) = pending
-            KaproVpnService.start(this, configJson, sessionName)
+        val p = pending
+        pending = null
+        if (result.resultCode == Activity.RESULT_OK && p != null) {
+            launchService(p)
         }
     }
 
     /** Колбэк для UI: либо запрос разрешения, либо сразу старт сервиса. */
-    private fun connectWith(configJson: String, sessionName: String) {
+    private fun connectWith(configJson: String, sessionName: String, dnsOption: DnsOption) {
+        val request = PendingConnect(configJson, sessionName, dnsOption)
         val prepareIntent: Intent? = VpnService.prepare(this)
         if (prepareIntent == null) {
-            KaproVpnService.start(this, configJson, sessionName)
+            launchService(request)
         } else {
-            pendingConfig = configJson to sessionName
+            pending = request
             vpnPermissionLauncher.launch(prepareIntent)
         }
+    }
+
+    private fun launchService(p: PendingConnect) {
+        KaproVpnService.start(
+            context = this,
+            configJson = p.configJson,
+            sessionName = p.sessionName,
+            tunDnsServers = p.dnsOption.plainServers,
+            dnsBypassIps = p.dnsOption.bypassIps,
+        )
     }
 
     private fun disconnect() {

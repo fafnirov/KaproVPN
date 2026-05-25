@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import pro.kaprovpn.android.core.DnsOption
 import pro.kaprovpn.android.core.ParseError
 import pro.kaprovpn.android.core.ShareUrlParser
 import pro.kaprovpn.android.core.XrayConfigBuilder
@@ -35,9 +36,12 @@ import pro.kaprovpn.android.vpn.XrayBridge
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    onConnect: (configJson: String, sessionName: String) -> Unit,
+    onConnect: (configJson: String, sessionName: String, dnsOption: DnsOption) -> Unit,
     onDisconnect: () -> Unit,
 ) {
+    // Phase 3 MVP: DNS захардкожен в System. Phase 5 поставит UI-пикер +
+    // персистенс в DataStore, пока — sensible default.
+    val dnsOption = DnsOption.SYSTEM
     val state by XrayBridge.state.collectAsState()
     var urlInput by remember { mutableStateOf("") }
     var lastError by remember { mutableStateOf<String?>(null) }
@@ -95,9 +99,13 @@ fun HomeScreen(
                             // Phase 3 MVP: пустой direct-list — туннелируем всё.
                             // Phase 4: подтянем default_sites.json и сделаем
                             // полноценный split-routing.
-                            val json = XrayConfigBuilder.buildConfigJson(proxy, emptyList())
+                            val json = XrayConfigBuilder.buildConfigJson(
+                                proxy = proxy,
+                                directDomains = emptyList(),
+                                dnsOption = dnsOption,
+                            )
                             lastError = null
-                            onConnect(json, proxy.name)
+                            onConnect(json, proxy.name, dnsOption)
                         } catch (e: ParseError) {
                             lastError = "Не удалось распарсить URL: ${e.message}"
                         } catch (e: Throwable) {

@@ -54,6 +54,18 @@
 - E2E на устройстве: **требует валидный share-URL** — пользователь
   должен вставить свой.
 
+**Resync под десктоп v1.9.x — DNS / privacy:**
+- `core.DnsOption` — порт `dns_options.py`. 4 опции: System / AdGuard /
+  Cloudflare / Quad9. Каждая знает свои DoH-URLs, plain-IP, bypass-IP ✓
+- `XrayConfigBuilder` обновлён: DNS-leak hardening (Cloudflare /32, Google /32,
+  Quad9 /32, Yandex /32 → direct), UDP/TCP port 53 → direct, AdGuard
+  ad-block rule (`geosite:category-ads-all` → block), DoH dns-block
+  для non-System options, `log.access: none` (privacy: без полной
+  истории браузинга на диске) ✓
+- `KaproVpnService` принимает `tunDnsServers` + `dnsBypassIps`; на
+  Android 13+ exclude-routes через `Builder.excludeRoute()` для DNS-IP ✓
+- 31 unit-тест (22 парсер + 9 на XrayConfigBuilder) зелёные ✓
+
 **Phase 3 MVP не делает (нужно в Phase 4):**
 - Split-routing — пока туннелируется ВЕСЬ трафик (включая RU-сайты).
   Доделать: загружать `default_sites.json` из assets, резолвить
@@ -61,6 +73,7 @@
   как в десктоп-`controller.py:_connect_tun`.
 - Сохранение конфигов (DataStore + JSON). Сейчас URL вводится каждый
   раз заново.
+- DNS-picker в UI (модели уже готовы, нужен Compose-экран Settings).
 - Список конфигов / picker / ping.
 - Kill-switch (Always-on VPN — настройка системы Android, частично
   бесплатно).

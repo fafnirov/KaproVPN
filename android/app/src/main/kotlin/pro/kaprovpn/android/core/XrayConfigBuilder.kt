@@ -41,6 +41,11 @@ object XrayConfigBuilder {
      * `proxy` — что куда подключать (parsed share-URL).
      * `directDomains` — список доменов, идущих в обход прокси (см.
      * `default_sites.json` — банки, госуслуги, маркетплейсы).
+     * `dnsOption` — выбранный пользователем DNS (System / AdGuard / etc).
+     *   Для не-System добавляется отдельный xray `dns` block с DoH-серверами +
+     *   IP резолвера форсируются direct (чтобы DoH-over-443 не делал круг
+     *   через VPN). Для AdGuard также добавляется rule блокирующее geosite
+     *   `category-ads-all` (~10k ad/tracker доменов).
      */
     fun buildConfig(
         proxy: ProxyConfig,
@@ -49,6 +54,7 @@ object XrayConfigBuilder {
         listenPort: Int = DEFAULT_LISTEN_PORT,
         logLevel: String = "warning",
         logFile: String? = null,
+        dnsOption: DnsOption = DnsOption.SYSTEM,
     ): JsonObject {
         val proxyOutbound = proxyToXrayOutbound(proxy)
         val cleaned = directDomains
@@ -86,6 +92,57 @@ object XrayConfigBuilder {
                 put("ip", buildJsonArray { add("geoip:private") })
                 put("outboundTag", "direct")
             })
+            // DNS-leak hardening (v1.8.0+): запросы к публичным резолверам
+            // ВСЕГДА direct, даже если ниже другое правило могло бы
+            // зацепить. Если приложение делает DNS-over-TCP/853 на эти
+            // IP — нашу VPN-провайдеру не увидит браузер-историю.
+            add(buildJsonObject {
+                put("type", "field")
+                put("outboundTag", "direct")
+                put("ip", buildJsonArray {
+                    add("1.1.1.1/32"); add("1.0.0.1/32")              // Cloudflare
+                    add("8.8.8.8/32"); add("8.8.4.4/32")              // Google
+                    add("9.9.9.9/32")                                  // Quad9
+                    add("77.88.8.8/32"); add("77.88.8.1/32")          // Yandex
+                    add("77.88.8.88/32"); add("77.88.8.7/32")         // Yandex safe/family
+                })
+            })
+            // И по порту — UDP/TCP 53 → direct. Ловит DNS к менее
+            // известным резолверам без хардкода их IP.
+            add(buildJsonObject {
+                put("type", "field")
+                put("outboundTag", "direct")
+                put("network", "udp")
+                put("port", "53")
+            })
+            add(buildJsonObject {
+                put("type", "field")
+                put("outboundTag", "direct")
+                put("network", "tcp")
+                put("port", "53")
+            })
+            // Bypass IP пользовательского DNS — если он не "System",
+            // его plain IPv4 идут direct (иначе DoH-over-443 из браузера
+            // улетел бы через VPN-сервер).
+            if (dnsOption.bypassIps.isNotEmpty()) {
+                add(buildJsonObject {
+                    put("type", "field")
+                    put("outboundTag", "direct")
+                    put("ip", buildJsonArray {
+                        dnsOption.bypassIps.forEach { add("$it/32") }
+                    })
+                })
+            }
+            // AdGuard only: блокируем geosite "category-ads-all" (~10k+
+            // известных ad/tracker доменов). Работает по SNI / HTTP CONNECT
+            // host'у любого outbound'а, независимо от DNS приложения.
+            if (dnsOption.key == "adguard") {
+                add(buildJsonObject {
+                    put("type", "field")
+                    put("outboundTag", "block")
+                    put("domain", buildJsonArray { add("geosite:category-ads-all") })
+                })
+            }
             // Direct-домены из списка.
             if (domainRules.isNotEmpty()) {
                 add(buildJsonObject {
@@ -100,6 +157,11 @@ object XrayConfigBuilder {
             put("log", buildJsonObject {
                 put("loglevel", logLevel)
                 if (!logFile.isNullOrEmpty()) put("error", logFile)
+                // Privacy: explicit disable access-log. Без "access: none"
+                // xray пишет линию-на-соединение (timestamp + src/dst IP/host)
+                // — это полная история браузинга на диске. Не хочется чтобы
+                // случайный share или backup её утёк.
+                put("access", "none")
             })
             put("stats", buildJsonObject {})
             put("policy", buildJsonObject {
@@ -114,6 +176,16 @@ object XrayConfigBuilder {
                 put("tag", "api")
                 put("services", buildJsonArray { add("StatsService") })
             })
+            // DNS block — только для non-System. DoH-серверы выбранного
+            // сервиса + IPv4-only (мы не туннелируем IPv6).
+            if (dnsOption.dohServers.isNotEmpty()) {
+                put("dns", buildJsonObject {
+                    put("servers", buildJsonArray {
+                        dnsOption.dohServers.forEach { add(it) }
+                    })
+                    put("queryStrategy", "UseIPv4")
+                })
+            }
             put("inbounds", buildJsonArray {
                 add(buildJsonObject {
                     put("tag", "http-in")
@@ -184,8 +256,11 @@ object XrayConfigBuilder {
         listenPort: Int = DEFAULT_LISTEN_PORT,
         logLevel: String = "warning",
         logFile: String? = null,
+        dnsOption: DnsOption = DnsOption.SYSTEM,
     ): String {
-        val cfg = buildConfig(proxy, directDomains, listenHost, listenPort, logLevel, logFile)
+        val cfg = buildConfig(
+            proxy, directDomains, listenHost, listenPort, logLevel, logFile, dnsOption,
+        )
         return prettyJson.encodeToString(JsonElement.serializer(), cfg)
     }
 
