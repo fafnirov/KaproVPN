@@ -72,6 +72,10 @@ sealed class Tab(val label: String, val icon: ImageVector) {
     object Settings : Tab("Настройки", Icons.Filled.Settings)
 
     companion object {
-        val ALL: List<Tab> = listOf(Home, Configs, Settings)
+        // lazy потому что static-init order для nested object'ов в Kotlin
+        // не гарантирован — без by lazy {} прямой `listOf(Home, ...)`
+        // может выполниться раньше чем Home/Configs/Settings проинициализи-
+        // руются, и список будет [null, null, null] → NPE при первом обращении.
+        val ALL: List<Tab> by lazy { listOf(Home, Configs, Settings) }
     }
 }

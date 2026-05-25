@@ -8,7 +8,18 @@ import androidx.compose.ui.graphics.Color
 private val DarkScheme = darkColorScheme(
     primary = AmberAccent,
     onPrimary = Color.Black,
+    primaryContainer = AmberContainer,
+    onPrimaryContainer = AmberOnContainer,
     secondary = AmberAccentDark,
+    onSecondary = Color.Black,
+    secondaryContainer = AmberContainer,
+    onSecondaryContainer = AmberOnContainer,
+    // tertiary мы тоже амбер-варианты, иначе M3-компоненты (chips, badges)
+    // улетают в дефолтный M3-фиолетовый.
+    tertiary = AmberAccent,
+    onTertiary = Color.Black,
+    tertiaryContainer = AmberContainer,
+    onTertiaryContainer = AmberOnContainer,
     background = DarkBackground,
     surface = DarkSurface,
     surfaceVariant = DarkSurfaceElevated,
