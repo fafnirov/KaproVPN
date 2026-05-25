@@ -14,6 +14,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -55,17 +56,26 @@ class AddConfigPage(QWidget):
         outer.addWidget(title)
 
         # --- URL field ---
-        outer.addWidget(QLabel("Вставь share-URL:"))
+        outer.addWidget(QLabel("Вставь share-URL или содержимое WireGuard .conf:"))
         self.url_edit = QPlainTextEdit()
         self.url_edit.setPlaceholderText(
             "vless://uuid@host:443?type=xhttp&security=reality...#Server name\n"
-            "(Также trojan://, vmess://, ss://, hysteria2://)"
+            "(Также trojan://, vmess://, ss://, hysteria2://)\n\n"
+            "Или вставь WireGuard .conf целиком — будет распознан автоматически."
         )
         self.url_edit.setMinimumHeight(120)
-        self.url_edit.setMaximumHeight(160)
+        self.url_edit.setMaximumHeight(180)
         # As soon as user types, re-validate
         self.url_edit.textChanged.connect(self._on_url_changed)
         outer.addWidget(self.url_edit)
+
+        # --- File picker for WG .conf (faster than copy-paste from a file) ---
+        wg_row = QHBoxLayout()
+        wg_btn = QPushButton("📄 Загрузить WireGuard .conf")
+        wg_btn.clicked.connect(self._on_load_wg_file)
+        wg_row.addWidget(wg_btn)
+        wg_row.addStretch(1)
+        outer.addLayout(wg_row)
 
         # --- Parse status row ---
         self.status_label = QLabel("")
@@ -171,3 +181,26 @@ class AddConfigPage(QWidget):
             return
         self._parsed.name = name
         self.config_ready.emit(self._parsed)
+
+    def _on_load_wg_file(self) -> None:
+        """Pick a WireGuard .conf, read it, drop into the URL field.
+
+        The file content goes through the same parser as paste — the
+        textChanged handler fires automatically and validates.
+        """
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выбери WireGuard .conf",
+            "",
+            "WireGuard configs (*.conf);;All files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError as e:
+            show_toast(self.window(), f"Не удалось открыть файл: {e}", kind="error")
+            return
+        # Setting plain text triggers textChanged → _on_url_changed →
+        # parse → validation. No need to call parse() manually.
+        self.url_edit.setPlainText(text)

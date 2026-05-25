@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -31,13 +32,14 @@ class AddConfigDialog(QDialog):
         layout = QVBoxLayout(self)
 
         layout.addWidget(QLabel(
-            "Вставь ссылку на конфиг "
-            "(trojan://, vless://, vmess://, ss://, hysteria2://):"
+            "Вставь ссылку на конфиг или содержимое WireGuard .conf "
+            "(trojan://, vless://, vmess://, ss://, hysteria2://, wireguard):"
         ))
 
         self.url_edit = QPlainTextEdit()
         self.url_edit.setPlaceholderText(
-            "trojan://<password>@host.example:443?security=tls&sni=host.example#Name"
+            "trojan://<password>@host.example:443?security=tls&sni=host.example#Name\n\n"
+            "Или вставь WireGuard .conf целиком — будет распознан по [Interface]."
         )
         layout.addWidget(self.url_edit, stretch=1)
 
@@ -45,6 +47,9 @@ class AddConfigDialog(QDialog):
         self.parse_btn = QPushButton("Распарсить")
         self.parse_btn.clicked.connect(self._on_parse)
         parse_row.addWidget(self.parse_btn)
+        wg_btn = QPushButton("📄 Загрузить .conf")
+        wg_btn.clicked.connect(self._on_load_wg_file)
+        parse_row.addWidget(wg_btn)
         parse_row.addStretch(1)
         self.detected_label = QLabel("")
         self.detected_label.setObjectName("muted")
@@ -115,6 +120,28 @@ class AddConfigDialog(QDialog):
         configs_picker reads this to pre-fill the subscription dialog.
         """
         return getattr(self, "_pending_subscription_url", None)
+
+    def _on_load_wg_file(self) -> None:
+        """Open a WireGuard .conf file and load its content into the editor.
+
+        Same end state as paste — _on_parse picks it up via the
+        [Interface]-header auto-detection in the parser.
+        """
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выбери WireGuard .conf",
+            "",
+            "WireGuard configs (*.conf);;All files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError as e:
+            QMessageBox.warning(self, "Файл", f"Не удалось открыть: {e}")
+            return
+        self.url_edit.setPlainText(text)
+        self._on_parse()
 
     def _on_accept(self) -> None:
         if self._result is None:

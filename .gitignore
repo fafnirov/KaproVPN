@@ -52,3 +52,12 @@ tun/wintun.dll
 # Local secrets / generated configs
 *.local.json
 *.pac.local
+
+# Real VPN configs — anyone dropping a .conf or .json into the repo
+# folder for testing must NOT have it committed. WireGuard configs
+# contain a PrivateKey; Xray/v2ray configs contain UUIDs/passwords;
+# .ovpn for OpenVPN. All are user-secret and stay out of git.
+*.conf
+*.ovpn
+test_*.json
+sample_*.json

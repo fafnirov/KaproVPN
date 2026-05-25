@@ -1,17 +1,27 @@
 """Parsers for proxy share URLs into sing-box outbound dicts.
 
-Supported schemes: trojan, vless, vmess, ss (Shadowsocks), hysteria2 / hy2.
-Each parser returns a `(display_name, outbound_dict)` tuple, where
+Supported schemes: trojan, vless, vmess, ss (Shadowsocks), hysteria2 / hy2,
+wireguard. Each parser returns a `(display_name, outbound_dict)` tuple, where
 `outbound_dict` is shaped for direct insertion into sing-box's
 `outbounds[]` array (the `tag` field is added by the config generator).
+
+WireGuard is special because there's no widely-adopted share-URL standard:
+configs are distributed as .conf INI files. We accept either:
+  - the raw INI text (auto-detected by the `[Interface]` header) pasted
+    into any URL/config input, OR
+  - a `wireguard://<base64-encoded-conf>#name` URL we synthesise from
+    the INI on save, so storage is round-trip stable and looks like
+    every other config in the list.
 """
 from __future__ import annotations
 
 import base64
+import configparser
+import io
 import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, quote
 
 
 class ParseError(ValueError):
@@ -349,6 +359,178 @@ def parse_hysteria2(url: str) -> ProxyConfig:
     return ProxyConfig(name=name, protocol="hysteria2", raw_url=url, outbound=outbound)
 
 
+# --- wireguard ------------------------------------------------------------
+
+def looks_like_wireguard_conf(text: str) -> bool:
+    """True if `text` looks like a WG .conf (has the [Interface] header).
+
+    Cheap precheck so we can detect WG before scheme-dispatch and avoid
+    the "Unsupported scheme 'https'" trap for users pasting INI content
+    into the wrong field.
+    """
+    return "[Interface]" in text and "PrivateKey" in text
+
+
+def _parse_wg_conf(conf_text: str) -> dict[str, Any]:
+    """Parse WireGuard INI .conf text into a structured dict.
+
+    Handles the standard wg-quick fields:
+      [Interface] PrivateKey, Address, DNS, MTU
+      [Peer]      PublicKey, PresharedKey, Endpoint, AllowedIPs, PersistentKeepalive
+
+    Returns the data in a shape close to xray's wireguard outbound
+    settings — caller just spreads it into the outbound JSON.
+    """
+    # configparser is strict by default about duplicate sections and the
+    # like — wg-quick files have exactly one [Interface] and one [Peer]
+    # for the common case but multiple [Peer]s are legal. We use the
+    # `strict=False` toggle so multi-peer files don't error here.
+    cp = configparser.RawConfigParser(strict=False)
+    try:
+        cp.read_file(io.StringIO(conf_text))
+    except configparser.Error as e:
+        raise ParseError(f"Bad WireGuard config: {e}") from e
+
+    if "Interface" not in cp.sections():
+        raise ParseError("WireGuard config missing [Interface] section")
+    if "Peer" not in cp.sections():
+        raise ParseError("WireGuard config missing [Peer] section")
+
+    iface = cp["Interface"]
+    private_key = (iface.get("PrivateKey") or "").strip()
+    if not private_key:
+        raise ParseError("WireGuard [Interface] needs PrivateKey")
+
+    addresses = [
+        a.strip() for a in (iface.get("Address") or "").split(",") if a.strip()
+    ]
+    if not addresses:
+        raise ParseError("WireGuard [Interface] needs Address")
+
+    dns_servers = [
+        d.strip() for d in (iface.get("DNS") or "").split(",") if d.strip()
+    ]
+    try:
+        mtu = int(iface.get("MTU") or 1420)
+    except ValueError:
+        mtu = 1420
+
+    peer = cp["Peer"]
+    public_key = (peer.get("PublicKey") or "").strip()
+    endpoint = (peer.get("Endpoint") or "").strip()
+    if not public_key:
+        raise ParseError("WireGuard [Peer] needs PublicKey")
+    if not endpoint or ":" not in endpoint:
+        raise ParseError("WireGuard [Peer] needs Endpoint host:port")
+
+    server_host, _, server_port_s = endpoint.rpartition(":")
+    try:
+        server_port = int(server_port_s)
+    except ValueError:
+        raise ParseError(f"WireGuard Endpoint port not an int: {server_port_s!r}")
+
+    allowed_ips = [
+        a.strip() for a in (peer.get("AllowedIPs") or "0.0.0.0/0").split(",") if a.strip()
+    ]
+    preshared = (peer.get("PresharedKey") or "").strip()
+    try:
+        keepalive = int(peer.get("PersistentKeepalive") or 0)
+    except ValueError:
+        keepalive = 0
+
+    return {
+        "secret_key": private_key,
+        "address": addresses,
+        "dns": dns_servers,
+        "mtu": mtu,
+        "server": server_host,
+        "server_port": server_port,
+        "public_key": public_key,
+        "preshared_key": preshared,
+        "allowed_ips": allowed_ips,
+        "keepalive": keepalive,
+    }
+
+
+def _wg_synthesize_url(conf_text: str, name: str) -> str:
+    """Build the round-trip-stable `wireguard://...#name` URL we store.
+
+    Base64-encoding the whole INI keeps the parsed dict perfectly
+    re-derivable without inventing a custom share-URL grammar.
+    """
+    payload = base64.b64encode(conf_text.encode("utf-8")).decode("ascii")
+    frag = quote(name)
+    return f"wireguard://{payload}#{frag}"
+
+
+def wg_conf_from_raw_url(raw_url: str) -> str:
+    """Inverse of _wg_synthesize_url — decode back to the original .conf text.
+
+    Used by the xray-config generator to re-parse fields when building
+    the runtime config (so we don't have to thread the parsed dict
+    through ProxyConfig.outbound).
+    """
+    if not raw_url.startswith("wireguard://"):
+        raise ParseError("Not a wireguard:// URL")
+    after = raw_url[len("wireguard://"):]
+    payload, _, _ = after.partition("#")
+    try:
+        return _b64_decode_padded(payload).decode("utf-8")
+    except Exception as e:
+        raise ParseError(f"WireGuard URL payload not valid base64: {e}") from e
+
+
+def parse_wireguard(url_or_conf: str) -> ProxyConfig:
+    """Accept either raw INI .conf text or a wireguard://<base64>#name URL."""
+    text = url_or_conf.strip()
+    if text.startswith("wireguard://"):
+        conf_text = wg_conf_from_raw_url(text)
+        # Preserve the explicit name from the URL fragment, if any
+        _, _, frag = text.partition("#")
+        url_name = unquote(frag) if frag else ""
+    else:
+        if not looks_like_wireguard_conf(text):
+            raise ParseError(
+                "Not a WireGuard config — expected [Interface] section "
+                "with PrivateKey, or a wireguard:// URL."
+            )
+        conf_text = text
+        url_name = ""
+
+    data = _parse_wg_conf(conf_text)
+
+    # The outbound dict format is xray-flavoured (we don't translate to
+    # sing-box style like the other parsers because we never had a
+    # sing-box wireguard implementation). The xray config generator
+    # spreads these fields directly.
+    outbound: dict[str, Any] = {
+        "type": "wireguard",
+        "server": data["server"],
+        "server_port": data["server_port"],
+        "private_key": data["secret_key"],
+        "peer_public_key": data["public_key"],
+        "address": data["address"],
+        "allowed_ips": data["allowed_ips"],
+        "mtu": data["mtu"],
+    }
+    if data["preshared_key"]:
+        outbound["preshared_key"] = data["preshared_key"]
+    if data["keepalive"]:
+        outbound["keepalive"] = data["keepalive"]
+    if data["dns"]:
+        outbound["dns"] = data["dns"]
+
+    # Pick a friendly default name from the endpoint host. Users almost
+    # always rename via the Settings textfield anyway.
+    name = url_name or f"wg-{data['server']}"
+
+    # Always store the canonical wireguard://<base64>#name form so the
+    # config list serializes/deserializes round-trip cleanly.
+    canonical_url = _wg_synthesize_url(conf_text, name)
+    return ProxyConfig(name=name, protocol="wireguard",
+                       raw_url=canonical_url, outbound=outbound)
+
+
 # --- dispatcher -----------------------------------------------------------
 
 _PARSERS = {
@@ -358,16 +540,23 @@ _PARSERS = {
     "ss": parse_shadowsocks,
     "hysteria2": parse_hysteria2,
     "hy2": parse_hysteria2,
+    "wireguard": parse_wireguard,
+    "wg": parse_wireguard,
 }
 
 
 def parse(url: str) -> ProxyConfig:
-    url = url.strip()
-    scheme = url.split("://", 1)[0].lower() if "://" in url else ""
+    text = url.strip()
+    # WireGuard .conf detection — must happen before scheme dispatch
+    # because the raw INI doesn't start with `scheme://`.
+    if looks_like_wireguard_conf(text):
+        return parse_wireguard(text)
+
+    scheme = text.split("://", 1)[0].lower() if "://" in text else ""
     parser = _PARSERS.get(scheme)
     if not parser:
         raise ParseError(
             f"Unsupported scheme '{scheme}'. "
             f"Expected one of: {', '.join(_PARSERS)}"
         )
-    return parser(url)
+    return parser(text)
