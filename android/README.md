@@ -113,11 +113,23 @@
 - material-icons-extended dep подключён ради CloudDownload — R8
   tree-shake'ит неиспользуемое в release ✓
 
-**Не сделано (Phase 7+):**
-- Encryption-at-rest для configs.json (Android Keystore + Cipher
-  или EncryptedSharedPreferences) — аналог Windows DPAPI с десктопа.
-  Пока plain JSON в private filesDir (другие приложения не могут
-  прочитать без root).
+**Phase 7 — Encryption at rest (готово):**
+- `core.SecretsStore` — AES-256-GCM через Android Keystore. Ключ
+  генерируется на первом запуске, хранится в TEE/hardware на
+  поддерживающих устройствах, alias `kaprovpn_configs_v1`. Magic-
+  prefix `KAPROVPN-AES-1 ` отличает encrypted-blob от legacy
+  plain JSON ✓
+- `Storage.loadConfigs` распознаёт legacy plain → парсит → следующий
+  save автоматически переписывает в encrypted (transparent миграция
+  с pre-Phase-7 установок) ✓
+- `Storage.saveConfigs` шифрует перед записью; atomic-ish .tmp+rename
+  сохранён ✓
+- settings.json оставлен plain — там dnsOptionKey / activeConfigName /
+  autoconnect — не секреты ✓
+- Build + tests зелёные. E2E (проверка зашифрованных байт через
+  adb run-as) — требует ручного добавления конфига в UI, опционально ✓
+
+**Не сделано (Phase 8+):**
 - Subscription auto-refresh каждые 12 часов — WorkManager periodic
   work (десктоп имеет в Sprint 2).
 - i18n (strings.xml RU/EN — порт `i18n.py` ключей; сейчас все

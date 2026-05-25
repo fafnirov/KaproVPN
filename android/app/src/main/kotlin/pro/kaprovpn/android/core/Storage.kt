@@ -78,12 +78,37 @@ object Storage {
     fun loadConfigs(context: Context): List<ProxyConfig> {
         val f = configsFile(context)
         if (!f.isFile) return emptyList()
-        return try {
-            json.decodeFromString(ListSerializer(ProxyConfig.serializer()), f.readText())
+        val raw = try {
+            f.readBytes()
         } catch (e: Throwable) {
-            Log.e(TAG, "configs.json повреждён — стартуем с пустого списка", e)
-            // НЕ удаляем файл — пусть пользователь может его руками
-            // починить или восстановить. Возвращаем пустой список.
+            Log.e(TAG, "configs read failed", e)
+            return emptyList()
+        }
+        // Два формата: новый encrypted (с магией) и legacy plain JSON.
+        // Распознаём по prefix'у — для миграции с pre-Phase-7 установок.
+        val jsonBytes = if (SecretsStore.looksEncrypted(raw)) {
+            try {
+                SecretsStore.decrypt(raw)
+            } catch (e: Throwable) {
+                // Decrypt fail — обычно reinstall (ключ из старой установки
+                // потерян). НЕ удаляем файл, чтобы пользователь мог сделать
+                // adb pull для debug, но грузим пустой список.
+                Log.e(TAG, "configs decrypt failed (reinstall?) — пустой список", e)
+                return emptyList()
+            }
+        } else {
+            // Legacy plain JSON — на лету парсим как обычно, при следующем
+            // save оно перейдёт в encrypted формат.
+            Log.i(TAG, "configs.json в legacy plain формате — будет зашифрован на следующем save")
+            raw
+        }
+        return try {
+            json.decodeFromString(
+                ListSerializer(ProxyConfig.serializer()),
+                jsonBytes.toString(Charsets.UTF_8),
+            )
+        } catch (e: Throwable) {
+            Log.e(TAG, "configs JSON parse failed — пустой список", e)
             emptyList()
         }
     }
@@ -91,14 +116,16 @@ object Storage {
     fun saveConfigs(context: Context, configs: List<ProxyConfig>) {
         try {
             val text = json.encodeToString(ListSerializer(ProxyConfig.serializer()), configs)
+            // Encrypt-at-rest: configs содержит UUID'ы / пароли / share-URL'ы —
+            // полные креды. На pre-Phase-7 был plain JSON, теперь AES-256-GCM
+            // через Android Keystore. Подробнее — [SecretsStore].
+            val encrypted = SecretsStore.encrypt(text.toByteArray(Charsets.UTF_8))
             // Atomic-ish write: пишем в .tmp, потом rename. Если процесс упадёт
             // между write и rename, configs.json останется старым валидным.
             val f = configsFile(context)
             val tmp = File(f.parentFile, "${f.name}.tmp")
-            tmp.writeText(text)
+            tmp.writeBytes(encrypted)
             if (!tmp.renameTo(f)) {
-                // На некоторых FS rename атомарен только в пределах one dir
-                // и не overwrite'ит existing. Делаем явный delete + rename.
                 f.delete()
                 tmp.renameTo(f)
             }
