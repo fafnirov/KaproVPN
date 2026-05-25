@@ -381,6 +381,24 @@ def build_config(
     domain_rules = [f"domain:{d}" for d in cleaned]
 
     rules: list[dict[str, Any]] = [
+        # Drop the link-local discovery noise FIRST. When Windows sees
+        # our new TUN interface it floods NetBIOS Name Service (UDP 137)
+        # broadcasts to the TUN subnet's broadcast address — observed
+        # at hundreds of packets/sec on a clean machine. Without this
+        # block, tun2socks captures every one, hands it to xray's
+        # socks-in, xray sends it to `direct` (private IP), and the
+        # OS may loop it right back into the TUN. Result: real traffic
+        # diagnostics drown in the noise and the loop wastes CPU.
+        #
+        # Same treatment for mDNS (5353), SSDP/UPnP (1900), and the
+        # rest of the NetBIOS suite (138/139). None of these belong in
+        # a VPN tunnel under any circumstances — they're LAN-scope.
+        {"type": "field", "outboundTag": "block",
+         "port": "137-139,1900,5353"},
+        # Multicast (224.0.0.0/4) and limited broadcast (255.255.255.255)
+        # also belong on the link, not in a tunnel.
+        {"type": "field", "outboundTag": "block",
+         "ip": ["224.0.0.0/4", "255.255.255.255/32"]},
         {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
     ]
     if domain_rules:
