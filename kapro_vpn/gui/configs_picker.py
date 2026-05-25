@@ -55,12 +55,12 @@ class _PingerThread(QThread):
         port = cfg.outbound.get("server_port")
         if not server or not port:
             return None
-        # UDP-only protocols (WireGuard, Hysteria2): a TCP-connect probe
-        # to their endpoint port ALWAYS fails (port is closed for TCP),
-        # which would falsely label the config "недоступен" even when
-        # the server is fine. Sentinel -1 tells the UI "skip the ping
+        # UDP-only protocols (Hysteria2): a TCP-connect probe to their
+        # endpoint port ALWAYS fails (port is closed for TCP), which
+        # would falsely label the config "недоступен" even when the
+        # server is fine. Sentinel -1 tells the UI "skip the ping
         # label, just show the protocol".
-        if cfg.protocol in ("wireguard", "wg", "hysteria2", "hy2"):
+        if cfg.protocol in ("hysteria2", "hy2"):
             return -1
         try:
             t0 = time.monotonic()

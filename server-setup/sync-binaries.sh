@@ -27,7 +27,6 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 XRAY_VERSION="v26.3.27"
 TUN2SOCKS_VERSION="v2.6.0"
 WINTUN_VERSION="0.14.1"
-WIREGUARD_VERSION="0.5.3"
 
 XRAY_ASSETS=(
     "Xray-windows-64.zip"
@@ -77,14 +76,6 @@ done
 
 echo "=== wintun.net $WINTUN_VERSION ==="
 fetch "https://www.wintun.net/builds/${WINTUN_FILE}" "$TMP_DIR/$WINTUN_FILE"
-
-echo "=== WireGuard for Windows $WIREGUARD_VERSION ==="
-# Bundled silently by KaproVPN on first WG-connect via msiexec /quiet —
-# user never sees an installer GUI. Direct MSI URL is stable; the .exe
-# bootstrapper on wireguard.com is just a thin wrapper around it.
-WG_MSI="wireguard-amd64-${WIREGUARD_VERSION}.msi"
-fetch "https://download.wireguard.com/windows-client/${WG_MSI}" \
-      "$TMP_DIR/$WG_MSI"
 
 echo "=== Promoting to $MIRROR_DIR ==="
 mkdir -p "$MIRROR_DIR"

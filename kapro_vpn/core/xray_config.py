@@ -209,83 +209,6 @@ def _trojan_to_xray(url: str) -> dict[str, Any]:
     }
 
 
-def _wireguard_to_xray(url: str) -> dict[str, Any]:
-    """Build an Xray-core wireguard outbound from our canonical
-    wireguard://<base64-conf>#name URL.
-
-    Xray's WireGuard outbound (since core v1.8) is a self-contained
-    UDP/IP stack on top of our existing transport — no extra binary
-    needed, same routing-rules story as VLESS/Trojan. Format:
-
-        {
-          "protocol": "wireguard",
-          "settings": {
-            "secretKey":  "<base64 priv>",
-            "address":    ["10.x.y.z/32"],
-            "peers": [{
-              "publicKey":   "<base64 pub>",
-              "endpoint":    "host:port",
-              "keepAlive":   25,
-              "allowedIPs":  ["0.0.0.0/0"]
-            }],
-            "mtu": 1420
-          }
-        }
-
-    DNS lines from the .conf are intentionally not propagated to xray's
-    outbound `dns` field — system DNS still routes through the kernel
-    resolver, and our split-routing rules pin Yandex/Cloudflare/Google
-    DNS via the real gateway anyway (_ALWAYS_BYPASS in controller.py).
-    """
-    from .parser import wg_conf_from_raw_url, _parse_wg_conf  # avoid cycle
-
-    conf_text = wg_conf_from_raw_url(url)
-    d = _parse_wg_conf(conf_text)
-
-    peer: dict[str, Any] = {
-        "publicKey": d["public_key"],
-        "endpoint": f"{d['server']}:{d['server_port']}",
-        "allowedIPs": d["allowed_ips"] or ["0.0.0.0/0"],
-    }
-    if d["keepalive"]:
-        peer["keepAlive"] = d["keepalive"]
-    if d["preshared_key"]:
-        peer["preSharedKey"] = d["preshared_key"]
-
-    settings: dict[str, Any] = {
-        "secretKey": d["secret_key"],
-        "address": d["address"],
-        "peers": [peer],
-        "mtu": d["mtu"],
-        # `workers` is read-channel count; 2 is a reasonable default on
-        # consumer hardware (xray uses CPU-count if omitted, which can
-        # over-allocate on big-core laptops).
-        "workers": 2,
-        # Match the Xray-core docs example verbatim — these fields
-        # default to similar values internally but being explicit avoids
-        # version-to-version drift in defaults.
-        #
-        # domainStrategy: ForceIP means xray resolves any domain
-        # destination BEFORE handing it to the WG outbound (we always
-        # get IPs from tun2socks anyway, so it's a no-op for TUN mode,
-        # but matters for HTTP-proxy mode where browsers send domain
-        # names in CONNECT requests).
-        "domainStrategy": "ForceIP",
-        # reserved is for WG variants that overwrite 3 bytes of the
-        # handshake (Cloudflare WARP, some custom providers). For
-        # stock WG `[0,0,0]` is a no-op — equivalent to not setting it
-        # but more explicit about our intent to be vanilla-compatible.
-        "reserved": [0, 0, 0],
-    }
-    return {
-        "tag": "proxy",
-        "protocol": "wireguard",
-        "settings": settings,
-        # WireGuard handles its own framing — no streamSettings needed,
-        # any value Xray would synthesize would be ignored.
-    }
-
-
 def _ss_to_xray(url: str) -> dict[str, Any]:
     after = url[len("ss://"):]
     if "#" in after:
@@ -341,15 +264,6 @@ def proxy_to_xray_outbound(cfg: ProxyConfig) -> dict[str, Any]:
         return _trojan_to_xray(cfg.raw_url)
     if scheme == "ss":
         return _ss_to_xray(cfg.raw_url)
-    if scheme in ("wireguard", "wg"):
-        # WireGuard no longer goes through xray. The controller routes
-        # WG configs to wireguard_service (official WireGuard for Windows
-        # service) directly. If we reach here, something upstream forgot
-        # to branch on protocol before calling build_config.
-        raise NotImplementedError(
-            "WireGuard runs outside xray. Use ConnectionManager.connect "
-            "which detects WG configs and dispatches to wireguard_service."
-        )
     if scheme in ("hysteria2", "hy2"):
         raise NotImplementedError(
             "Xray-core не поддерживает Hysteria2. Используй v2/hy2-совместимый клиент "
@@ -373,14 +287,6 @@ def build_config(
     outbound as the default for non-matching traffic, so domains not in the
     direct list go through `proxy` automatically.
     """
-    # WireGuard is new in v1.2 and uses xray's gVisor user-space stack —
-    # subtle handshake/MTU issues are hard to diagnose at the default
-    # `warning` level. Bump to `info` for WG so xray.log carries
-    # "connect to wireguard server" / "handshake completed" lines that
-    # let us tell apart "config is wrong" from "ISP is blocking UDP".
-    if proxy.protocol in ("wireguard", "wg"):
-        log_level = "info"
-
     proxy_outbound = proxy_to_xray_outbound(proxy)
     cleaned = sorted({d.strip().lower() for d in direct_domains if d.strip()})
 
