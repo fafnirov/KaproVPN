@@ -96,18 +96,35 @@
   показывает active config card с янтарной подсветкой когда подключён,
   CTA для пустого состояния, ВКЛЮЧИТЬ работает с saved active config ✓
 
-**Не сделано (Phase 6+):**
+**Phase 6 — Subscription import (готово):**
+- `core.Subscription` — порт `subscription.py`. parseBody (plain
+  + base64 + URL-safe base64) + import() через HttpURLConnection,
+  suspend на Dispatchers.IO ✓
+- `ui.SubscriptionDialog` — URL input → fetch с прогресс-спиннером
+  → результат «Найдено N серверов» + preview первых 5 → «Добавить
+  все» ✓
+- `AppRepository.addConfigs(list)` — пакетная замена-merge,
+  существующие имена обновляются, первый импортированный становится
+  активным если активного не было ✓
+- ConfigsScreen TopAppBar — IconButton «Импорт по подписке» + Snackbar
+  «Импортировано N серверов» после успеха ✓
+- 6 unit-тестов на parseBody + resultFromBody (plain, base64,
+  URL-safe base64, comments, broken entries) ✓
+- material-icons-extended dep подключён ради CloudDownload — R8
+  tree-shake'ит неиспользуемое в release ✓
+
+**Не сделано (Phase 7+):**
 - Encryption-at-rest для configs.json (Android Keystore + Cipher
   или EncryptedSharedPreferences) — аналог Windows DPAPI с десктопа.
   Пока plain JSON в private filesDir (другие приложения не могут
   прочитать без root).
-- Импорт по подписке (порт `subscription.py` + WorkManager для
-  12-часового auto-refresh — теперь есть AppRepository куда складывать
-  результат).
-- Kill-switch (Always-on VPN — настройка системы Android, бесплатно).
+- Subscription auto-refresh каждые 12 часов — WorkManager periodic
+  work (десктоп имеет в Sprint 2).
 - i18n (strings.xml RU/EN — порт `i18n.py` ключей; сейчас все
   тексты захардкожены в RU).
+- Kill-switch (Always-on VPN — настройка системы Android, бесплатно).
 - Ping per config + sorting.
+- Release pipeline (signing, R8/ProGuard, ABI splits).
 
 ## Требования
 

@@ -45,6 +45,28 @@ object AppRepository {
         val updated = without + config
         _configs.value = updated
         Storage.saveConfigs(ctx, updated)
+        // Если ничего не было активного — делаем новый активным,
+        // чтобы Home сразу мог подключиться. Для пакетного импорта
+        // это сработает только на ПЕРВЫЙ конфиг из пачки.
+        if (_settings.value.activeConfigName == null) {
+            setActiveConfig(config.name)
+        }
+    }
+
+    /**
+     * Пакетная замена-merge — для импорта подписки. Существующие
+     * конфиги с теми же именами перезаписываются (UUID/host могли
+     * обновиться у провайдера). Имена которых нет — остаются.
+     */
+    fun addConfigs(newConfigs: List<ProxyConfig>) {
+        if (newConfigs.isEmpty()) return
+        val newNames = newConfigs.map { it.name }.toSet()
+        val merged = _configs.value.filterNot { it.name in newNames } + newConfigs
+        _configs.value = merged
+        Storage.saveConfigs(ctx, merged)
+        if (_settings.value.activeConfigName == null) {
+            setActiveConfig(newConfigs.first().name)
+        }
     }
 
     fun removeConfig(name: String) {

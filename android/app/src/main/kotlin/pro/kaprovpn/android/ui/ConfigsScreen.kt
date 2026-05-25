@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,6 +32,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -39,8 +42,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -57,10 +62,25 @@ fun ConfigsScreen(modifier: Modifier = Modifier) {
     val settings by AppRepository.settings.collectAsState()
     val activeName = settings.activeConfigName
     var showAddDialog by remember { mutableStateOf(false) }
+    var showSubDialog by remember { mutableStateOf(false) }
+    val snackbarHost = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text("Серверы") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Серверы") },
+                actions = {
+                    IconButton(onClick = { showSubDialog = true }) {
+                        Icon(
+                            Icons.Filled.CloudDownload,
+                            contentDescription = "Импорт по подписке",
+                        )
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showAddDialog = true },
@@ -68,6 +88,7 @@ fun ConfigsScreen(modifier: Modifier = Modifier) {
                 text = { Text("Добавить") },
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHost) },
     ) { innerPadding ->
         if (configs.isEmpty()) {
             EmptyConfigsState(modifier = Modifier.padding(innerPadding))
@@ -98,9 +119,19 @@ fun ConfigsScreen(modifier: Modifier = Modifier) {
             onDismiss = { showAddDialog = false },
             onSave = { config ->
                 AppRepository.addConfig(config)
-                // Если это первый конфиг — сразу делаем его активным.
-                if (configs.isEmpty()) AppRepository.setActiveConfig(config.name)
                 showAddDialog = false
+            },
+        )
+    }
+
+    if (showSubDialog) {
+        SubscriptionDialog(
+            onDismiss = { showSubDialog = false },
+            onAdded = { count ->
+                showSubDialog = false
+                scope.launch {
+                    snackbarHost.showSnackbar("Импортировано серверов: $count")
+                }
             },
         )
     }

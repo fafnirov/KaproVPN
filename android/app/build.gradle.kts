@@ -119,6 +119,10 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // material-icons-extended ~3-4 MB, но R8 tree-shake'ит неиспользуемые
+    // в release. Используется для CloudDownload и других иконок, которых
+    // нет в material-icons-core (Home/List/Settings/Add/Check/Delete).
+    implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     implementation(libs.androidx.datastore.preferences)
