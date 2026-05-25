@@ -9,7 +9,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import pro.kaprovpn.android.core.DnsOption
-import pro.kaprovpn.android.ui.HomeScreen
 import pro.kaprovpn.android.ui.theme.KaproVpnTheme
 import pro.kaprovpn.android.vpn.KaproVpnService
 
@@ -76,7 +75,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             KaproVpnTheme {
-                HomeScreen(
+                pro.kaprovpn.android.ui.AppNav(
                     onConnect = ::connectWith,
                     onDisconnect = ::disconnect,
                 )

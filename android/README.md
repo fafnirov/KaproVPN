@@ -77,17 +77,37 @@
   split-routing работает "бесплатно" — xray роутит по domain rules,
   Android выводит app-сокеты из TUN ✓
 
-**Не сделано (Phase 5+):**
-- Сохранение конфигов (DataStore + EncryptedSharedPreferences для
-  паролей — Android-аналог Windows DPAPI с десктопа). Сейчас URL
-  вводится заново на каждом коннекте.
-- DNS-picker в UI (модели уже готовы, нужен Compose-экран Settings).
-- Список конфигов / picker / ping per config.
+**Phase 5 — Storage + UI экраны (готово):**
+- `core.AppSettings` — @Serializable data class (dnsOptionKey,
+  activeConfigName, autoconnectOnLaunch) ✓
+- `core.Storage` — saveConfigs / loadConfigs / saveSettings /
+  loadSettings, JSON в filesDir, atomic-ish write через .tmp + rename ✓
+- `core.AppRepository` — singleton-холдер StateFlow для конфигов и
+  настроек. Compose-экраны подписываются через `collectAsState()` ✓
+- 3-таб навигация (`ui.AppNav`) в `Scaffold.bottomBar` без
+  navigation-compose lib — Home / Серверы / Настройки ✓
+- `ui.ConfigsScreen` — LazyColumn со списком, FAB «Добавить»
+  открывает диалог с share-URL TextField, swipe-to-set-active,
+  delete-icon. Empty state с CTA ✓
+- `ui.SettingsScreen` — 4 DnsOption-карточки (RadioButton),
+  Switch для autoconnect, секция «О приложении» с версией
+  Xray-core ✓
+- `ui.HomeScreen` переписан — больше нет TextField'а (он в Configs),
+  показывает active config card с янтарной подсветкой когда подключён,
+  CTA для пустого состояния, ВКЛЮЧИТЬ работает с saved active config ✓
+
+**Не сделано (Phase 6+):**
+- Encryption-at-rest для configs.json (Android Keystore + Cipher
+  или EncryptedSharedPreferences) — аналог Windows DPAPI с десктопа.
+  Пока plain JSON в private filesDir (другие приложения не могут
+  прочитать без root).
 - Импорт по подписке (порт `subscription.py` + WorkManager для
-  12-часового auto-refresh).
-- Kill-switch (Always-on VPN — настройка системы Android, частично
-  бесплатно).
-- i18n (strings.xml RU/EN — порт `i18n.py` ключей).
+  12-часового auto-refresh — теперь есть AppRepository куда складывать
+  результат).
+- Kill-switch (Always-on VPN — настройка системы Android, бесплатно).
+- i18n (strings.xml RU/EN — порт `i18n.py` ключей; сейчас все
+  тексты захардкожены в RU).
+- Ping per config + sorting.
 
 ## Требования
 
