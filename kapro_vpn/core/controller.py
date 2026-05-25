@@ -94,6 +94,10 @@ class ConnectionManager:
         self._saved_proxy_state: Optional[dict] = None
         self._route_session: Optional[network_routes.RouteSession] = None
         self._active: Optional[ProxyConfig] = None
+        # WG mode uses an external Windows service — its tunnel name is
+        # kept here so disconnect() knows what to tear down. None when
+        # the active config isn't WG.
+        self._active_wg_tunnel: Optional[str] = None
         # Belt-and-braces: if Python exits uncleanly with TUN routes active,
         # the user's network is broken until reboot. Best-effort cleanup here.
         atexit.register(self._atexit_cleanup)
@@ -107,6 +111,13 @@ class ConnectionManager:
     def connect(self, config: ProxyConfig, direct_domains: list[str]) -> None:
         if self.is_connected():
             raise ConnectionError("Уже подключено. Сначала отключись.")
+        # WireGuard takes a completely different code path — it doesn't
+        # run inside xray at all. The official WireGuard for Windows
+        # service does the actual protocol; we just orchestrate it +
+        # add bypass routes on top for split-routing.
+        if config.protocol in ("wireguard", "wg"):
+            self._connect_wireguard(config, direct_domains)
+            return
         mode = self.settings.get("mode", MODE_HTTP_PROXY)
         if mode == MODE_TUN:
             self._connect_tun(config, direct_domains)
@@ -129,11 +140,26 @@ class ConnectionManager:
             finally:
                 self._saved_proxy_state = None
         self.process.stop()
+        # If we were in WG mode, also uninstall the WireGuard service.
+        # Doing this AFTER xray/tun cleanup is harmless — they're
+        # unrelated for WG configs anyway.
+        if self._active_wg_tunnel is not None:
+            from . import wireguard_service
+            try:
+                wireguard_service.uninstall_tunnel(self._active_wg_tunnel)
+            except Exception:
+                pass
+            self._active_wg_tunnel = None
         self._active = None
 
     def is_connected(self) -> bool:
         # In TUN mode, the active session is tun_process + xray both up.
         # In HTTP mode, just xray.
+        # In WG mode, neither xray nor tun_process — we check the
+        # WireGuard Windows service instead.
+        if self._active_wg_tunnel is not None:
+            from . import wireguard_service
+            return wireguard_service.is_tunnel_active(self._active_wg_tunnel)
         return self.process.is_running() or self.tun_process.is_running()
 
     def active_config(self) -> Optional[ProxyConfig]:
@@ -145,6 +171,138 @@ class ConnectionManager:
 
     def current_mode(self) -> str:
         return self.settings.get("mode", MODE_HTTP_PROXY)
+
+    # --- WireGuard mode (via official WireGuard for Windows service) ------
+
+    def _connect_wireguard(self, config: ProxyConfig,
+                           direct_domains: list[str]) -> None:
+        """Bring up a WireGuard tunnel via WireGuard.exe /installtunnelservice.
+
+        WG is fundamentally system-wide (it creates a kernel TUN with a
+        default route per AllowedIPs), so it bypasses xray entirely and
+        ignores the HTTP-proxy vs TUN-mode toggle. Required:
+
+          - Windows (only platform we support WG on for v1.3)
+          - Admin (Windows service install needs it)
+          - WireGuard for Windows installed (we detect and prompt)
+
+        Split-routing: WG service handles default-via-tunnel, we add
+        bypass routes for direct-list domains + geoip:ru on top.
+        """
+        if sys.platform != "win32":
+            raise ConnectionError(
+                "WireGuard в KaproVPN пока работает только на Windows.\n"
+                "Для mac/Linux используй другой протокол (VLESS/Trojan/VMess) "
+                "или подожди следующего релиза."
+            )
+        if not admin.is_admin():
+            raise ConnectionError(
+                "WireGuard требует прав администратора (нужно для регистрации "
+                "Windows-службы туннеля).\n"
+                "Перезапусти KaproVPN от имени администратора и попробуй снова."
+            )
+
+        from . import wireguard_service
+        from .parser import wg_conf_from_raw_url
+
+        # Check that WireGuard for Windows is installed.
+        if not wireguard_service.is_installed():
+            raise ConnectionError(
+                "Для WG-конфигов нужен официальный WireGuard для Windows "
+                "(10 МБ, ставится за минуту).\n\n"
+                f"Скачай: {wireguard_service.DOWNLOAD_URL}\n"
+                "Запусти установщик, потом снова жми «Подключить»."
+            )
+
+        # First-launch cleanup: remove any orphan KaproVPN-* tunnels
+        # from previous crashed runs. Cheap (one `sc query`).
+        try:
+            wireguard_service.cleanup_orphan_tunnels()
+        except Exception:
+            pass
+
+        # Recover the raw .conf text. parser.py base64-encodes it inside
+        # raw_url for round-trip storage; here we need the actual INI to
+        # hand to WireGuard.exe.
+        try:
+            conf_text = wg_conf_from_raw_url(config.raw_url)
+        except Exception as e:
+            raise ConnectionError(
+                f"Не удалось декодировать WG-конфиг: {e}"
+            ) from e
+
+        # Snapshot the default route BEFORE WG installs its own, so our
+        # bypass-route additions know where to point.
+        real = network_routes.get_default_route_v4()
+        if real is None or not real.gateway or not real.index:
+            raise ConnectionError(
+                "Не удалось определить текущий шлюз по умолчанию. "
+                "Возможно, нет активного интернет-соединения."
+            )
+
+        tunnel_name = wireguard_service.sanitize_tunnel_name(config.name)
+        self._log(f"[*] Регистрирую WG-туннель как Windows-службу: {tunnel_name}")
+        try:
+            wireguard_service.install_tunnel(conf_text, tunnel_name)
+        except wireguard_service.WireGuardError as e:
+            raise ConnectionError(str(e)) from e
+
+        # Service install is async — wait for it to actually be RUNNING
+        # before adding bypass routes (the WG interface needs to exist
+        # for routes via it to be valid).
+        if not wireguard_service.wait_for_tunnel_up(tunnel_name, timeout=10.0):
+            wireguard_service.uninstall_tunnel(tunnel_name)
+            raise ConnectionError(
+                "Windows-служба WG зарегистрировалась, но не вышла в RUNNING "
+                "за 10 секунд. Проверь journal в Event Viewer "
+                "(Application log, source: WireGuard) — там будет конкретная "
+                "ошибка от tunnel.dll."
+            )
+        self._log(f"[*] WG-туннель активен")
+        self._active_wg_tunnel = tunnel_name
+
+        # Bypass routes for split-routing — same pattern as TUN mode,
+        # just layered on top of WG's own default routes instead of our
+        # tun2socks-managed default.
+        session = network_routes.RouteSession()
+        bypass_metric = real.interface_metric + 1
+        try:
+            # Direct-domains bypass: resolve, install /32 host-routes
+            # via real gateway so kernel never sends them to WG.
+            if direct_domains:
+                self._log(f"[*] Резолвлю {len(direct_domains)} прямых доменов…")
+                domain_ips = network_routes.resolve_domains_parallel(direct_domains)
+                all_ips = sorted({ip for ips in domain_ips.values() for ip in ips})
+                resolved = sum(1 for ips in domain_ips.values() if ips)
+                self._log(
+                    f"[*] Резолв: {resolved}/{len(direct_domains)} доменов, "
+                    f"{len(all_ips)} уникальных IP"
+                )
+                added = session.add_bypass_routes(
+                    all_ips, real.gateway, real.index, metric=bypass_metric,
+                )
+                self._log(f"[*] Добавлено {added} bypass-роутов для прямых доменов")
+
+            # geoip:ru — bulk bypass for the whole local CIDR space.
+            ru_cidrs = geoip_ru.load_cidrs()
+            if ru_cidrs:
+                self._log(f"[*] Добавляю {len(ru_cidrs)} CIDR'ов из geoip-списка…")
+                t0 = time.time()
+                added = session.add_bypass_cidrs(
+                    ru_cidrs, real.gateway, real.index, metric=bypass_metric,
+                )
+                self._log(
+                    f"[*] Добавлено {added} CIDR'ов за {time.time()-t0:.1f}с — "
+                    f"локальный IP-блок идёт мимо WG"
+                )
+        except Exception:
+            session.restore()
+            wireguard_service.uninstall_tunnel(tunnel_name)
+            self._active_wg_tunnel = None
+            raise
+
+        self._route_session = session
+        self._active = config
 
     # --- HTTP-proxy mode (browsers only) ----------------------------------
 

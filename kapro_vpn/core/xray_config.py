@@ -342,7 +342,14 @@ def proxy_to_xray_outbound(cfg: ProxyConfig) -> dict[str, Any]:
     if scheme == "ss":
         return _ss_to_xray(cfg.raw_url)
     if scheme in ("wireguard", "wg"):
-        return _wireguard_to_xray(cfg.raw_url)
+        # WireGuard no longer goes through xray. The controller routes
+        # WG configs to wireguard_service (official WireGuard for Windows
+        # service) directly. If we reach here, something upstream forgot
+        # to branch on protocol before calling build_config.
+        raise NotImplementedError(
+            "WireGuard runs outside xray. Use ConnectionManager.connect "
+            "which detects WG configs and dispatches to wireguard_service."
+        )
     if scheme in ("hysteria2", "hy2"):
         raise NotImplementedError(
             "Xray-core не поддерживает Hysteria2. Используй v2/hy2-совместимый клиент "
