@@ -8,6 +8,50 @@ users see when they click the release tag.
 
 ---
 
+## v1.8.3 — Hotfix: v1.8.2 не зарелизился из-за моего бага в smoke-тесте
+
+Тот самый момент когда «делаю тесты чтобы не сломать релиз» сам же
+и сломал релиз. Заслужил.
+
+**Что произошло:** в v1.8.2 я добавил 5 installer-тестов в smoke-pipeline
+как guard против регрессии из v1.8.1. Один из них — «Maintenance
+Reinstall button starts install flow» — синхронно эмитил сигнал
+`reinstall_clicked`, который запускает install-worker. На Windows у
+меня локально это «как-то работало», на Linux CI-раннере воркер
+пытался реально установить KaproVPN (скачать xray, написать в
+`%LOCALAPPDATA%`, добавить запись в HKCU) — процесс сегфолтил.
+
+Smoke → exit non-zero → `build` job не стартует (через
+`needs: smoke-test`) → `action-gh-release` не запускается → **ни одного
+артефакта в Releases для v1.8.2**. Юзер видит v1.8.1 как «последний».
+
+**Что фикшу здесь:**
+
+- 🔧 **smoke-test reinstall-проверка** теперь стабит
+  `operations.install_everything` к no-op, ждёт worker через
+  `.wait(2000)` чтобы Qt не ругалась на «QThread destroyed while still
+  running» (тоже может крашить процесс), и **усиливает assertion** до
+  `currentWidget is InstallingPage` — это ровно тот же shape что v1.8.1
+  ловит, поэтому теперь если кто-то выпилит `setCurrentWidget` из
+  reinstall-пути, smoke поймает.
+
+**Что от v1.8.2 въезжает в этот релиз** (так как v1.8.2 на гитхабе
+не появился — фактически вы получаете оба обновления разом):
+
+- ✅ **Кнопка «Удалить KaproVPN» в Maintenance UI теперь работает**
+  (был забыт `setCurrentWidget` после `addWidget` в `_build_uninstall_flow`).
+- ✅ **Убран лишний чекбокс «Создать ярлык на Рабочем столе»** в
+  Maintenance UI — при reinstall ярлык уже есть, создавать дубликат
+  на Desktop'е не нужно.
+- ✅ **5 installer-тестов в smoke-pipeline** теперь работают целиком
+  (4 проходили в v1.8.2, 5-й крашил процесс — теперь все 5 зелёные).
+
+Lesson learned: тестировать smoke-test pipeline через `QT_QPA_PLATFORM=offscreen
+python -m kapro_vpn.scripts.smoke_test` ЛОКАЛЬНО **с проверкой exit-кода**
+прежде чем пушить тег. Не «у меня всё импортится — наверно ок».
+
+---
+
 ## v1.8.2 — Фиксы v1.8.1: кнопка «Удалить» теперь работает
 
 Юзер протестировал v1.8.1 — нашёл что я пропустил:

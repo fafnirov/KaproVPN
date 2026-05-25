@@ -262,21 +262,41 @@ def _maintenance_uninstall_button_switches_page(InstallerWindow, MaintenancePage
 
 
 def _maintenance_reinstall_button_starts_install(InstallerWindow, MaintenancePage):
-    w = InstallerWindow(mode="maintenance")
-    # Spying: when Reinstall is clicked, _switch_to_install should
-    # build/switch to InstallingPage. We can check the stack contains
-    # an InstallingPage after the signal fires (the worker itself
-    # would be async — we don't wait for it).
+    # Unlike Uninstall (which only builds a confirm UI), Reinstall fires
+    # the install worker directly — and the worker calls
+    # operations.install_everything which downloads xray, writes to
+    # %LOCALAPPDATA%, registers an uninstaller in HKCU. On a Linux CI
+    # runner that crashes the process and the whole smoke test exits
+    # non-zero, blocking the release.
+    #
+    # Stub install_everything to a no-op so we test the UI transition
+    # without doing real work. We also strengthen the assertion: not
+    # "InstallingPage exists in stack" but "currentWidget IS
+    # InstallingPage" — this is the exact same shape as the v1.8.1
+    # regression (addWidget without setCurrentWidget) so we want to
+    # catch a Reinstall variant of it too.
+    from installer import operations
     from installer.gui import InstallingPage
-    w.maintenance.reinstall_clicked.emit()
-    has_installing = any(
-        isinstance(w.stack.widget(i), InstallingPage)
-        for i in range(w.stack.count())
-    )
-    if not has_installing:
-        raise AssertionError(
-            "maintenance → reinstall: InstallingPage never added to stack"
-        )
+    original_install = operations.install_everything
+    operations.install_everything = lambda **kw: None
+    try:
+        w = InstallerWindow(mode="maintenance")
+        w.maintenance.reinstall_clicked.emit()
+        cur = w.stack.currentWidget()
+        if not isinstance(cur, InstallingPage):
+            raise AssertionError(
+                f"maintenance → reinstall should switch stack to "
+                f"InstallingPage, got {type(cur).__name__} "
+                f"(v1.8.1-shaped regression — setCurrentWidget missing)"
+            )
+        # Let the (stubbed) worker thread finish so Qt doesn't warn
+        # "QThread destroyed while still running" at GC time, which
+        # can manifest as a process abort on Linux.
+        worker = getattr(w, "_worker", None)
+        if worker is not None:
+            worker.wait(2000)
+    finally:
+        operations.install_everything = original_install
 
 
 check("install mode lands on WelcomePage",
