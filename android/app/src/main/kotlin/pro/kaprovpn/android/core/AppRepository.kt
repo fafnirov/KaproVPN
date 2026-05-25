@@ -90,6 +90,26 @@ object AppRepository {
         _configs.value.find { it.name == name }
     }
 
+    /**
+     * Готовый Xray-JSON + сессионное имя для активного конфига, либо
+     * `null` если активного нет. Зовётся из:
+     *   - HomeScreen при тапе ВКЛЮЧИТЬ (через MainActivity callback);
+     *   - KaproVpnService на null-intent старт (Always-on VPN системно
+     *     поднимает сервис без extras — нужно собрать конфиг из saved
+     *     state). См. Phase 10.
+     */
+    fun buildActiveConfigJson(): Pair<String, String>? {
+        val cfg = activeConfig() ?: return null
+        val directDomains = Storage.loadDefaultSites(ctx)
+        val dns = dnsOption()
+        val json = XrayConfigBuilder.buildConfigJson(
+            proxy = cfg,
+            directDomains = directDomains,
+            dnsOption = dns,
+        )
+        return json to cfg.name
+    }
+
     // -- settings --------------------------------------------------------
 
     fun setDnsOption(key: String) {

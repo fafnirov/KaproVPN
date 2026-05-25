@@ -19,6 +19,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import pro.kaprovpn.android.MainActivity
 import pro.kaprovpn.android.R
+import pro.kaprovpn.android.core.AppRepository
+import pro.kaprovpn.android.core.DnsOption
 
 /**
  * VPN-сервис, который держит TUN-интерфейс и натравливает на него libv2ray.
@@ -115,13 +117,44 @@ class KaproVpnService : VpnService() {
                 disconnect()
             }
             else -> {
-                Log.w(TAG, "unknown action: ${intent?.action}")
+                // Null intent / no action = system-initiated start. Чаще всего
+                // это Always-on VPN: пользователь включил «Always-on VPN» +
+                // «Block connections without VPN» в системных настройках, и
+                // система сама стартует наш сервис при загрузке устройства
+                // или после краша. Восстанавливаем последний активный конфиг
+                // из AppRepository.
+                Log.i(TAG, "system-initiated start (Always-on?) — рестор active config")
+                val built = AppRepository.buildActiveConfigJson()
+                if (built == null) {
+                    Log.w(TAG, "system-initiated старт, но active config не задан — стопаем")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                val (configJson, sessionName) = built
+                val dns = AppRepository.dnsOption()
+                connect(configJson, sessionName, dns.plainServers, dns.bypassIps)
+                // REDELIVER_INTENT: если процесс убьют после старта, система
+                // перезапустит с тем же (null) intent → этот же код опять
+                // подхватит active config.
+                return START_REDELIVER_INTENT
             }
         }
-        // NOT_STICKY: если систему убьёт наш процесс — не пересоздавать
-        // (туннель всё равно умер бы вместе с FD). User должен явно
-        // переподключиться.
         return START_NOT_STICKY
+    }
+
+    /**
+     * Вызывается системой когда пользователь отзывает VPN-разрешение
+     * через системные настройки (Network → VPN → "Forget" / "Disconnect")
+     * или когда другой VPN-клиент захватывает permission на нашем месте.
+     *
+     * Default-имплементация VpnService просто закрывает TUN-fd, но мы
+     * хотим явно остановить xray, иначе он остаётся живым с уже мёртвым
+     * TUN'ом и spam'ит ошибками. См. Phase 10.
+     */
+    override fun onRevoke() {
+        Log.i(TAG, "onRevoke — система отозвала VPN permission")
+        disconnect()
+        super.onRevoke()
     }
 
     private fun connect(

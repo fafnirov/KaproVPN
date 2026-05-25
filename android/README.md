@@ -160,8 +160,24 @@
   Автоподключением ✓
 - Build ✓, тесты ✓
 
-**Не сделано (Phase 10+):**
-- Kill-switch (Always-on VPN — настройка системы Android, бесплатно).
+**Phase 10 — Always-on VPN + kill-switch (готово):**
+- `KaproVpnService.onStartCommand` handle null intent (system-initiated
+  start через Always-on VPN) — читает active config из AppRepository
+  + собирает Xray-JSON + поднимает TUN. `START_REDELIVER_INTENT` для
+  этого случая чтобы рестарт сохранял intent ✓
+- `KaproVpnService.onRevoke` — graceful cleanup когда система отзывает
+  permission (user, другой VPN-клиент захватил). Раньше дефолтная
+  реализация просто закрывала FD — xray-core продолжал жить и
+  спамить ошибками ✓
+- `AppRepository.buildActiveConfigJson()` — helper для обоих путей
+  (HomeScreen + Always-on auto-start) ✓
+- SettingsScreen — секция «Always-on VPN (kill-switch)» с hint'ом
+  и кнопкой `Settings.ACTION_VPN_SETTINGS` открывающей системные VPN
+  настройки ✓
+- Strings RU/EN ✓
+- Build ✓
+
+**Не сделано (Phase 11+):**
 - Ping per config + sorting.
 - Release pipeline (signing, R8/ProGuard, ABI splits).
 

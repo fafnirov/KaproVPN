@@ -76,6 +76,9 @@
     <string name="settings_autoconnect_subtitle">Подключаться к активному серверу как только откроется приложение</string>
     <string name="settings_subrefresh_title">Автообновление подписки</string>
     <string name="settings_subrefresh_subtitle">Раз в 12 часов перетягивать свежий список с твоей последней subscription-ссылки</string>
+    <string name="settings_alwayson_title">Always-on VPN (kill-switch)</string>
+    <string name="settings_alwayson_subtitle">В системных настройках Android включи «Always-on VPN» и «Block connections without VPN». Тогда KaproVPN будет автостартовать на загрузке и блокировать весь трафик если туннель упал — никаких leak\'ов на реальный IP.</string>
+    <string name="settings_alwayson_open">Открыть системные настройки VPN</string>
     <string name="settings_about_header">О приложении</string>
     <string name="settings_xray_version">Xray-core: %1$s</string>
     <string name="settings_app_version">KaproVPN Android (Phase 8)</string>

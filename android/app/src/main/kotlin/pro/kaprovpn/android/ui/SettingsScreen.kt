@@ -1,5 +1,7 @@
 package pro.kaprovpn.android.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -29,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -87,6 +91,29 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 checked = settings.subscriptionAutorefresh,
                 onCheckedChange = { AppRepository.setSubscriptionAutorefresh(it) },
             )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // -- Kill-switch / Always-on VPN -----------------------------
+            // Android умеет блокировать сетевой трафик когда VPN неактивен —
+            // это и есть «kill-switch». Включается в системных настройках,
+            // не в нашем приложении. Здесь — link на эти настройки + hint.
+            SectionHeader(stringResource(R.string.settings_alwayson_title))
+            Text(
+                stringResource(R.string.settings_alwayson_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val context = LocalContext.current
+            OutlinedButton(onClick = {
+                runCatching {
+                    val intent = Intent(Settings.ACTION_VPN_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
+            }) {
+                Text(stringResource(R.string.settings_alwayson_open))
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
