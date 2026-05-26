@@ -1,23 +1,25 @@
 package pro.kaprovpn.android.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -25,20 +27,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import pro.kaprovpn.android.R
 import pro.kaprovpn.android.core.AppRepository
 import pro.kaprovpn.android.core.DnsOption
 import pro.kaprovpn.android.core.Storage
 import pro.kaprovpn.android.core.XrayConfigBuilder
+import pro.kaprovpn.android.core.serverHostPort
 import pro.kaprovpn.android.vpn.XrayBridge
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,6 +52,7 @@ fun HomeScreen(
     onConnect: (configJson: String, sessionName: String, dnsOption: DnsOption) -> Unit,
     onDisconnect: () -> Unit,
     onAddFirstConfig: () -> Unit = {},
+    onPickConfig: () -> Unit = onAddFirstConfig,  // тап по config-card → Servers tab
 ) {
     val context = LocalContext.current
     val xrayState by XrayBridge.state.collectAsState()
@@ -64,84 +69,104 @@ fun HomeScreen(
     val isBusy = xrayState is XrayBridge.State.Starting || xrayState is XrayBridge.State.Stopping
     var lastError by remember { mutableStateOf<String?>(null) }
 
-    // Bandwidth-стата опрашивается раз в секунду пока Connected.
-    // totalUp/Down — счётчик с момента старта сессии (xray accumulates
-    // его внутри); upRate/downRate — delta за последнюю секунду.
-    // На disconnect LaunchedEffect ребекаф'ится (key=xrayState),
-    // переменные ресетятся.
-    var totalUp by remember { mutableStateOf(0L) }
-    var totalDown by remember { mutableStateOf(0L) }
-    var upRate by remember { mutableStateOf(0L) }
-    var downRate by remember { mutableStateOf(0L) }
+    // Uptime: track момент когда стали Connected и тикаем каждую секунду.
+    // На disconnect — ресетим.
+    var connectedSince by remember { mutableStateOf(0L) }
+    var uptimeText by remember { mutableStateOf("") }
 
     LaunchedEffect(xrayState) {
-        if (xrayState !is XrayBridge.State.Connected) {
-            totalUp = 0; totalDown = 0; upRate = 0; downRate = 0
-            return@LaunchedEffect
+        if (xrayState is XrayBridge.State.Connected) {
+            if (connectedSince == 0L) connectedSince = System.currentTimeMillis()
+            while (true) {
+                val elapsed = (System.currentTimeMillis() - connectedSince) / 1000
+                uptimeText = formatUptime(elapsed)
+                delay(1000L)
+            }
+        } else {
+            connectedSince = 0L
+            uptimeText = ""
         }
-        var prevUp = XrayBridge.queryStats("proxy", "uplink")
-        var prevDown = XrayBridge.queryStats("proxy", "downlink")
-        while (true) {
-            delay(1000L)
-            val nowUp = XrayBridge.queryStats("proxy", "uplink")
-            val nowDown = XrayBridge.queryStats("proxy", "downlink")
-            upRate = (nowUp - prevUp).coerceAtLeast(0)
-            downRate = (nowDown - prevDown).coerceAtLeast(0)
-            totalUp = nowUp
-            totalDown = nowDown
-            prevUp = nowUp
-            prevDown = nowDown
+    }
+
+    val connectState = remember(xrayState) {
+        when (xrayState) {
+            XrayBridge.State.Idle -> ConnectState.Idle
+            XrayBridge.State.Starting -> ConnectState.Starting
+            XrayBridge.State.Connected -> ConnectState.Connected
+            XrayBridge.State.Stopping -> ConnectState.Stopping
+            is XrayBridge.State.Failed -> ConnectState.Failed
         }
     }
 
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.app_name)) }) },
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                },
+            )
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(horizontal = 24.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.weight(1f))
 
-            if (activeConfig == null) {
-                EmptyState(onAddClick = onAddFirstConfig)
-            } else {
-                ActiveConfigCard(
-                    name = activeConfig.name,
-                    protocol = activeConfig.protocol,
-                    isConnected = isConnected,
-                )
-            }
+            // Главный элемент — большая круглая кнопка
+            ConnectButton(
+                state = connectState,
+                onClick = {
+                    if (isConnected) {
+                        onDisconnect()
+                        return@ConnectButton
+                    }
+                    if (isBusy) return@ConnectButton
+                    val cfg = activeConfig
+                    if (cfg == null) {
+                        onAddFirstConfig()
+                        return@ConnectButton
+                    }
+                    try {
+                        val json = XrayConfigBuilder.buildConfigJson(
+                            proxy = cfg,
+                            directDomains = directSites,
+                            dnsOption = dnsOption,
+                        )
+                        lastError = null
+                        onConnect(json, cfg.name, dnsOption)
+                    } catch (e: Throwable) {
+                        lastError = context.getString(R.string.home_config_error, e.message ?: "")
+                    }
+                },
+            )
 
+            Spacer(Modifier.size(8.dp))
+
+            // Single-line статус под кнопкой
             Text(
-                text = stateLabel(xrayState),
-                style = MaterialTheme.typography.bodyMedium,
+                text = statusLine(xrayState, uptimeText),
+                style = MaterialTheme.typography.titleMedium,
                 color = when (xrayState) {
                     is XrayBridge.State.Failed -> Color(0xFFEF4444)
                     XrayBridge.State.Connected -> MaterialTheme.colorScheme.primary
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
+                textAlign = TextAlign.Center,
             )
 
-            if (isConnected) {
-                Text(
-                    text = stringResource(R.string.home_traffic_up,
-                        formatBytes(totalUp), formatBytes(upRate)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.home_traffic_down,
-                        formatBytes(totalDown), formatBytes(downRate)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            // Bandwidth убрали с главного экрана — десктоп его тоже не
+            // показывает, а Phase 16 текущие цифры доступны в Logs если
+            // вернёмся к ним.
 
             lastError?.let { err ->
                 Text("⚠ $err",
@@ -149,138 +174,108 @@ fun HomeScreen(
                     style = MaterialTheme.typography.bodySmall)
             }
 
-            Spacer(Modifier.size(8.dp))
-
-            if (!isConnected) {
-                Button(
-                    onClick = {
-                        val cfg = activeConfig ?: return@Button
-                        try {
-                            val json = XrayConfigBuilder.buildConfigJson(
-                                proxy = cfg,
-                                directDomains = directSites,
-                                dnsOption = dnsOption,
-                            )
-                            lastError = null
-                            onConnect(json, cfg.name, dnsOption)
-                        } catch (e: Throwable) {
-                            lastError = context.getString(R.string.home_config_error, e.message ?: "")
-                        }
-                    },
-                    enabled = activeConfig != null && !isBusy,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    ),
-                ) {
-                    Text(
-                        if (isBusy) stringResource(R.string.home_connecting)
-                        else stringResource(R.string.home_connect)
-                    )
-                }
-            } else {
-                Button(
-                    onClick = onDisconnect,
-                    enabled = !isBusy,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    ),
-                ) { Text(stringResource(R.string.home_disconnect)) }
-            }
-
             Spacer(Modifier.weight(1f))
-            // Footer: count of bypassed sites + active DNS choice.
-            val isRussian = LocalContext.current.resources.configuration.locales[0].language == "ru"
-            val dnsLabel = if (isRussian) dnsOption.labelRu else dnsOption.labelEn
+
+            // Footer info
             Text(
-                text = stringResource(R.string.home_footer, directSites.size, dnsLabel),
+                text = stringResource(R.string.home_direct_sites, directSites.size),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+
+            Spacer(Modifier.size(8.dp))
+
+            // Config card внизу — name + protocol-tag + addr + ▶ для picker'а
+            if (activeConfig != null) {
+                ConfigBottomCard(
+                    name = activeConfig.name,
+                    protocol = activeConfig.protocol.uppercase(),
+                    hostPort = activeConfig.serverHostPort(),
+                    onClick = onPickConfig,
+                )
+            } else {
+                OutlinedButton(onClick = onAddFirstConfig) {
+                    Text(stringResource(R.string.home_add_server))
+                }
+            }
         }
     }
 }
 
+/**
+ * Карточка активного сервера в нижней трети экрана. Аналог
+ * десктоп-варианта (см. скрин). Tap открывает Servers tab (picker).
+ *
+ * Шапка: "🇳🇱 BMV1+ · VLESS XHTTP · Reality · Avito" (имя из ProxyConfig)
+ * Низ: [VLESS] tag + 46.17.101.82:30443 + ▶
+ */
 @Composable
-private fun ActiveConfigCard(
+private fun ConfigBottomCard(
     name: String,
     protocol: String,
-    isConnected: Boolean,
+    hostPort: String,
+    onClick: () -> Unit,
 ) {
-    val accent = if (isConnected) MaterialTheme.colorScheme.primary
-                 else MaterialTheme.colorScheme.surfaceVariant
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = accent),
-        shape = RoundedCornerShape(16.dp),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(stringResource(R.string.home_active_server),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isConnected)
-                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
-                else MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                color = if (isConnected) MaterialTheme.colorScheme.onPrimary
-                else MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
             )
-            Text(
-                text = protocol,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isConnected)
-                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Spacer(Modifier.size(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Tag-chip
+                Text(
+                    text = protocol,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    text = hostPort,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
-    }
-}
-
-@Composable
-private fun EmptyState(onAddClick: () -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(stringResource(R.string.app_name),
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold)
-        Text(
-            "${stringResource(R.string.home_no_servers_title)}\n" +
-                stringResource(R.string.home_no_servers_hint),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.size(8.dp))
-        OutlinedButton(onClick = onAddClick) {
-            Text(stringResource(R.string.home_add_server))
-        }
     }
 }
 
+/** Главная строка статуса под кнопкой. */
 @Composable
-private fun stateLabel(s: XrayBridge.State): String = when (s) {
-    XrayBridge.State.Idle -> stringResource(R.string.state_idle)
-    XrayBridge.State.Starting -> stringResource(R.string.state_connecting)
-    XrayBridge.State.Connected -> stringResource(R.string.state_connected)
-    XrayBridge.State.Stopping -> stringResource(R.string.state_disconnecting)
-    is XrayBridge.State.Failed -> stringResource(R.string.state_error, s.reason)
+private fun statusLine(s: XrayBridge.State, uptime: String): String = when (s) {
+    XrayBridge.State.Idle -> stringResource(R.string.home_status_idle)
+    XrayBridge.State.Starting -> stringResource(R.string.home_status_connecting)
+    XrayBridge.State.Connected -> stringResource(R.string.home_status_connected, uptime)
+    XrayBridge.State.Stopping -> stringResource(R.string.home_status_disconnecting)
+    is XrayBridge.State.Failed -> stringResource(R.string.home_status_failed, s.reason)
 }
 
-/** Форматирование байт в human-readable. KB/MB/GB c одним знаком после
- *  точки. Локаль-aware форматтер использует системные separators (точка
- *  vs запятая) — но для compactности форсим точку. */
-private fun formatBytes(bytes: Long): String = when {
-    bytes < 1024L -> "$bytes B"
-    bytes < 1024L * 1024 -> "%.1f KB".format(java.util.Locale.US, bytes / 1024.0)
-    bytes < 1024L * 1024 * 1024 -> "%.1f MB".format(java.util.Locale.US,
-        bytes / (1024.0 * 1024))
-    else -> "%.2f GB".format(java.util.Locale.US, bytes / (1024.0 * 1024 * 1024))
+/** Форматирует seconds → "h:mm:ss" или "mm:ss" если меньше часа. */
+private fun formatUptime(seconds: Long): String {
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s)
+    else "%d:%02d".format(m, s)
 }

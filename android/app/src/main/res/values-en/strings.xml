@@ -29,6 +29,13 @@
     <string name="home_config_error">Config generation failed: %1$s</string>
     <string name="home_traffic_up">↑ %1$s · %2$s/s</string>
     <string name="home_traffic_down">↓ %1$s · %2$s/s</string>
+    <!-- "Connected · 3:00:25 · TUN" -->
+    <string name="home_status_connected">Connected · %1$s · TUN</string>
+    <string name="home_status_idle">Disconnected</string>
+    <string name="home_status_connecting">Connecting…</string>
+    <string name="home_status_disconnecting">Disconnecting…</string>
+    <string name="home_status_failed">Error: %1$s</string>
+    <string name="home_direct_sites">Direct sites — %1$d domains bypass the VPN</string>
 
     <!-- Connection state -->
     <string name="state_idle">disconnected</string>

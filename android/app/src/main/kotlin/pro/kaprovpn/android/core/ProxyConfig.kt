@@ -25,3 +25,35 @@ data class ProxyConfig(
 
 /** Бросается парсерами на синтаксические / семантические ошибки в share-URL. */
 class ParseError(message: String, cause: Throwable? = null) : IllegalArgumentException(message, cause)
+
+/**
+ * Извлекает `host:port` из rawUrl для UI-отображения. Не парсит весь URL
+ * полноценно — только локально находит userinfo@host:port секцию. Возвращает
+ * пустую строку если структура не распознана.
+ *
+ * Не использует [ShareUrlParser.splitShareUri] потому что (а) для vmess
+ * это не работает (base64-payload), (б) UI вызывает это часто и хочет
+ * быстро.
+ */
+fun ProxyConfig.serverHostPort(): String {
+    return when {
+        // vmess: outbound содержит address+port из distilled JSON
+        protocol == "vmess" -> {
+            val addr = outbound["server"]?.let {
+                (it as? kotlinx.serialization.json.JsonPrimitive)?.content
+            } ?: return ""
+            val port = outbound["server_port"]?.let {
+                (it as? kotlinx.serialization.json.JsonPrimitive)?.content
+            } ?: return ""
+            "$addr:$port"
+        }
+        // Остальные — username@host:port в самом URL
+        else -> {
+            val afterScheme = rawUrl.substringAfter("://", "")
+            val authority = afterScheme.substringBefore('/').substringBefore('?').substringBefore('#')
+            // Берём всё после последнего @ (хост может содержать [IPv6]).
+            val hostport = authority.substringAfterLast('@', missingDelimiterValue = authority)
+            hostport
+        }
+    }
+}
