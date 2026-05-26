@@ -164,6 +164,10 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // LocalLifecycleOwner в Compose был частью compose-ui, но deprecated с
+    // Compose 1.7+. Современный — из lifecycle-runtime-compose. Нужен для
+    // ScanQrScreen, который привязывает CameraX к LifecycleOwner.
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
 
@@ -181,6 +185,17 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.kotlinx.serialization.json)
+
+    // QR-сканер на ConfigsScreen → ScanQrScreen. CameraX даёт PreviewView +
+    // ImageAnalysis use-case, ML Kit barcode жуёт байты с analyzer'а и
+    // достаёт share-URL. Bundled-вариант ML Kit (~2.5 MB к APK) — модель
+    // уже внутри AAR, не дёргает Play Services, работает offline на
+    // устройствах без GMS.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.mlkit.barcode.scanning)
 
     testImplementation(libs.junit)
 }

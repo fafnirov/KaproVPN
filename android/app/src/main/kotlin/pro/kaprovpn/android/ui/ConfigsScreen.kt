@@ -29,10 +29,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -45,6 +49,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,16 +83,34 @@ import pro.kaprovpn.android.core.serverHostPort
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConfigsScreen(modifier: Modifier = Modifier) {
+fun ConfigsScreen(
+    modifier: Modifier = Modifier,
+    onOpenScan: () -> Unit = {},
+    prefillShareUrl: String? = null,
+    onPrefillConsumed: () -> Unit = {},
+) {
     val configs by AppRepository.configs.collectAsState()
     val settings by AppRepository.settings.collectAsState()
     val pings by AppRepository.pings.collectAsState()
     val activeName = settings.activeConfigName
     var showAddDialog by remember { mutableStateOf(false) }
+    var addDialogInitialUrl by remember { mutableStateOf("") }
     var showSubDialog by remember { mutableStateOf(false) }
+    var showAddMenu by remember { mutableStateOf(false) }
     val snackbarHost = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    // ScanQrScreen вернулся с распарсенным share-URL — открываем AddDialog,
+    // pre-fill'им и сразу сообщаем AppNav'у что prefill подхвачен (иначе
+    // recompose снова откроет диалог).
+    LaunchedEffect(prefillShareUrl) {
+        if (prefillShareUrl != null) {
+            addDialogInitialUrl = prefillShareUrl
+            showAddDialog = true
+            onPrefillConsumed()
+        }
+    }
 
     val activeConfig = configs.find { it.name == activeName }
     val otherConfigs = configs.filterNot { it.name == activeName }
@@ -113,24 +136,52 @@ fun ConfigsScreen(modifier: Modifier = Modifier) {
                             contentDescription = stringResource(R.string.configs_ping_refresh),
                         )
                     }
-                    IconButton(onClick = { showSubDialog = true }) {
-                        Icon(
-                            Icons.Filled.CloudDownload,
-                            contentDescription = stringResource(R.string.configs_import_subscription),
-                        )
-                    }
+                    // CloudDownload (subscription import) переехал в FAB-меню
+                    // в Phase QR — TopAppBar теперь чище.
                 },
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showAddDialog = true },
-                icon = {
-                    Icon(Icons.Filled.Add,
-                        contentDescription = stringResource(R.string.configs_add))
-                },
-                text = { Text(stringResource(R.string.configs_add)) },
-            )
+            Box {
+                ExtendedFloatingActionButton(
+                    onClick = { showAddMenu = true },
+                    icon = {
+                        Icon(Icons.Filled.Add,
+                            contentDescription = stringResource(R.string.configs_add))
+                    },
+                    text = { Text(stringResource(R.string.configs_add)) },
+                )
+                DropdownMenu(
+                    expanded = showAddMenu,
+                    onDismissRequest = { showAddMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.configs_add_via_url)) },
+                        leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                        onClick = {
+                            showAddMenu = false
+                            addDialogInitialUrl = ""
+                            showAddDialog = true
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.configs_add_via_qr)) },
+                        leadingIcon = { Icon(Icons.Filled.QrCodeScanner, contentDescription = null) },
+                        onClick = {
+                            showAddMenu = false
+                            onOpenScan()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.configs_import_subscription)) },
+                        leadingIcon = { Icon(Icons.Filled.CloudDownload, contentDescription = null) },
+                        onClick = {
+                            showAddMenu = false
+                            showSubDialog = true
+                        },
+                    )
+                }
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHost) },
     ) { innerPadding ->
@@ -186,10 +237,15 @@ fun ConfigsScreen(modifier: Modifier = Modifier) {
 
     if (showAddDialog) {
         AddConfigDialog(
-            onDismiss = { showAddDialog = false },
+            initialUrl = addDialogInitialUrl,
+            onDismiss = {
+                showAddDialog = false
+                addDialogInitialUrl = ""
+            },
             onSave = { config ->
                 AppRepository.addConfig(config)
                 showAddDialog = false
+                addDialogInitialUrl = ""
             },
         )
     }
@@ -459,12 +515,16 @@ private fun OnboardingPathCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddConfigDialog(
+    initialUrl: String = "",
     onDismiss: () -> Unit,
     onSave: (ProxyConfig) -> Unit,
 ) {
-    var urlInput by remember { mutableStateOf("") }
-    var customName by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
+    // `key = initialUrl` чтобы при reopen с другим pre-fill state TextField'а
+    // обновлялся. Без этого второй вызов с свежим QR показал бы старое
+    // содержимое из памяти.
+    var urlInput by remember(initialUrl) { mutableStateOf(initialUrl) }
+    var customName by remember(initialUrl) { mutableStateOf("") }
+    var error by remember(initialUrl) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
 
     AlertDialog(

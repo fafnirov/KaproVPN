@@ -57,7 +57,14 @@
     <string name="configs_delete">Удалить</string>
     <string name="configs_active_marker">Активный</string>
     <string name="configs_import_subscription">Импорт по подписке</string>
+    <string name="configs_add_via_url">Вставить URL вручную</string>
+    <string name="configs_add_via_qr">Сканировать QR-код</string>
     <string name="configs_import_done">Импортировано серверов: %1$d</string>
+    <string name="scan_qr_title">Сканировать QR</string>
+    <string name="scan_qr_hint">Наведи камеру на QR-код с share-URL (vless / vmess / trojan / ss). Распознавание автоматическое.</string>
+    <string name="camera_perm_title">Нет доступа к камере</string>
+    <string name="camera_perm_body">Чтобы сканировать QR-коды, разреши доступ к камере в системных настройках приложения. Без него можно вставить share-URL вручную.</string>
+    <string name="camera_perm_open_settings">Открыть настройки</string>
     <string name="configs_ping_refresh">Обновить пинг</string>
     <string name="configs_ping_pending">…</string>
     <string name="configs_ping_failed">недоступен</string>

@@ -38,6 +38,11 @@ fun AppNav(
     // for one nested screen — a single boolean here keeps lifecycle and back
     // dispatch trivial. Adds up later when we have several deep screens.
     var settingsSubScreen by remember { mutableStateOf<SettingsSubScreen>(SettingsSubScreen.Root) }
+    var configsSubScreen by remember { mutableStateOf<ConfigsSubScreen>(ConfigsSubScreen.Root) }
+    // Buffer для URL, который вернулся из ScanQrScreen. ConfigsScreen его
+    // подхватит на recompose, откроет AddDialog с pre-fill и сбросит обратно
+    // в null через onPrefillConsumed. Null = ничего не сканировали.
+    var pendingScannedUrl by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         bottomBar = {
@@ -62,7 +67,22 @@ fun AppNav(
                 onDisconnect = onDisconnect,
                 onAddFirstConfig = { selectedTab = Tab.Configs },
             )
-            Tab.Configs -> ConfigsScreen(modifier = modifier)
+            Tab.Configs -> when (configsSubScreen) {
+                ConfigsSubScreen.Root -> ConfigsScreen(
+                    modifier = modifier,
+                    onOpenScan = { configsSubScreen = ConfigsSubScreen.Scan },
+                    prefillShareUrl = pendingScannedUrl,
+                    onPrefillConsumed = { pendingScannedUrl = null },
+                )
+                ConfigsSubScreen.Scan -> ScanQrScreen(
+                    modifier = modifier,
+                    onScanned = { url ->
+                        pendingScannedUrl = url
+                        configsSubScreen = ConfigsSubScreen.Root
+                    },
+                    onBack = { configsSubScreen = ConfigsSubScreen.Root },
+                )
+            }
             Tab.Logs -> LogsScreen(modifier = modifier)
             Tab.Settings -> {
                 when (settingsSubScreen) {
@@ -87,6 +107,14 @@ fun AppNav(
 private sealed class SettingsSubScreen {
     object Root : SettingsSubScreen()
     object ExcludedApps : SettingsSubScreen()
+}
+
+/** Configs tab держит вложенный ScanQrScreen — открывается через FAB-меню
+ *  «Сканировать QR» и возвращается с распарсенным share-URL (через
+ *  pendingScannedUrl буфер в [AppNav]). */
+private sealed class ConfigsSubScreen {
+    object Root : ConfigsSubScreen()
+    object Scan : ConfigsSubScreen()
 }
 
 /** Четыре вкладки. labelRes — индирекция через R.string чтобы получить
