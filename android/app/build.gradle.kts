@@ -1,5 +1,6 @@
 import org.gradle.api.tasks.Copy
 import java.net.URI
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -7,6 +8,26 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
+
+// --------------------------------------------------------------------------
+// Release signing — читаем keystore-параметры из keystore.properties в корне
+// android/. Файл gitignored (содержит пароли). Если файла нет, release
+// собирается debug-ключом (для personal use OK, но overwrite-апдейт через
+// Play не получится — нужен консистентный keystore).
+//
+// Создать keystore (один раз):
+//   keytool -genkey -v -keystore kaprovpn-release.jks -keyalg RSA \
+//     -keysize 4096 -validity 10000 -alias kaprovpn
+// Потом скопировать `keystore.properties.example` → `keystore.properties`,
+// заполнить пути / пароли.
+// --------------------------------------------------------------------------
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.inputStream().use { load(it) }
+    }
+}
+val hasReleaseSigning = keystoreProps.getProperty("storeFile") != null
 
 android {
     namespace = "pro.kaprovpn.android"
@@ -22,17 +43,49 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8: shrink + obfuscate + optimize. Без этого debug-сборка =
+            // release-сборка (150MB и весь dead code из icons-extended).
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Release-signing если keystore.properties задан, иначе debug-key.
+            signingConfig = if (hasReleaseSigning)
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
         }
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+        }
+    }
+
+    // ABI splits — отдельный APK на каждую архитектуру вместо одного fat
+    // APK со всеми 4 .so внутри. Уменьшает download size с ~150MB до
+    // ~40-50MB на устройство. Universal APK (со всеми ABI) тоже выдаётся
+    // для прямой раздачи когда не знаешь ABI приёмника.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = true
         }
     }
 

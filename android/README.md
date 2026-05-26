@@ -191,8 +191,53 @@
 - Strings RU/EN ✓
 - Build ✓
 
-**Не сделано (Phase 12+):**
-- Release pipeline (signing config, R8/ProGuard, ABI splits, AAB).
+**Phase 12 — Release pipeline (готово):**
+- `app/build.gradle.kts` читает `keystore.properties` из корня
+  `android/` (gitignored). Есть keystore — release подписан им;
+  нет — fallback на debug-key (OK для личного использования, не для
+  Play-апдейтов) ✓
+- R8 включён для release: `isMinifyEnabled=true` +
+  `isShrinkResources=true`. Tree-shake'ит неиспользуемое из
+  material-icons-extended и подобного ✓
+- ABI splits — отдельный APK на каждую архитектуру.
+  Universal-APK тоже выдаётся для прямой раздачи без знания ABI ✓
+- `proguard-rules.pro` обновлён: keep libv2ray/CoreCallbackHandler
+  (JNI-callbacks), Workers (WorkManager reflection), `$$serializer`/
+  Companion (kotlinx-serialization) ✓
+- `keystore.properties.example` — template + инструкция как
+  сгенерировать keystore через `keytool` ✓
+
+Результаты release-сборки:
+- arm64-v8a: 42 МБ (современные телефоны)
+- armeabi-v7a: 40 МБ (старые ARM32)
+- x86_64: 44 МБ
+- x86: 41 МБ
+- universal: 140 МБ (все ABI в одном)
+
+Это ~3.5× меньше debug-сборки. Каждый ABI-APK помещается во вложение
+Telegram (50 МБ лимит для обычных пользователей), что важно для
+распространения вне Play.
+
+## Как собрать release-APK
+
+```powershell
+# 1. (один раз) сгенерировать keystore
+keytool -genkey -v -keystore android\kaprovpn-release.jks `
+    -keyalg RSA -keysize 4096 -validity 10000 -alias kaprovpn
+
+# 2. (один раз) скопировать example + заполнить пути / пароли
+Copy-Item android\keystore.properties.example android\keystore.properties
+# Открой keystore.properties в редакторе и впиши passwords.
+
+# 3. собрать
+cd android
+.\gradlew.bat :app:assembleRelease
+# → android/app/build/outputs/apk/release/app-{abi}-release.apk
+```
+
+Без keystore.properties release всё равно соберётся — но подписан
+debug-key'ем. Установится только на чистый телефон, апдейт поверх
+release с другой подписью не пройдёт.
 
 ## Требования
 

@@ -5,6 +5,8 @@ build/
 # Local SDK path / signing — never commit
 local.properties
 keystore.properties
+# keystore.properties.example остаётся в git как template
+!keystore.properties.example
 *.keystore
 *.jks
 
