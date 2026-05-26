@@ -61,3 +61,6 @@ tun/wintun.dll
 *.ovpn
 test_*.json
 sample_*.json
+
+# Ad-hoc emulator screenshots saved during manual testing.
+build-screen.png

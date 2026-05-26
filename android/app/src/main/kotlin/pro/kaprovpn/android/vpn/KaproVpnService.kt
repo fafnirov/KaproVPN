@@ -203,18 +203,35 @@ class KaproVpnService : VpnService() {
             }
             tun = pfd
 
-            // detachFd передаёт владение FD libv2ray — мы НЕ закрываем pfd
-            // сами, иначе у Go отвалится поток чтения и xray остановится.
-            val tunFd = pfd.detachFd()
+            // ВАЖНО — берём `getFd()` НЕ `detachFd()`, потому что
+            // hev-socks5-tunnel (и sockstun из которого мы вытащили .so)
+            // полагается на то что fd валиден пока pfd живёт. detachFd
+            // оставляет fd "ничейным" в Java-плоскости, native lib мог
+            // получить его и сразу exit'нуть как «invalid fd».
+            // pfd закрываем сами при disconnect — это и закрывает fd.
+            val tunFd = pfd.fd
             Log.i(TAG, "TUN established fd=$tunFd")
 
+            // Шаг 1 — стартуем xray-core (SOCKS5 inbound на 127.0.0.1:2081).
+            // Передаём tunFd=0 потому что libv2ray всё равно не читает TUN.
             try {
-                XrayBridge.start(configJson, tunFd)
-                // Дальнейшие обновления notification идут через
-                // stateObserver Flow-collector в onCreate.
+                XrayBridge.start(configJson, 0)
             } catch (e: Throwable) {
                 Log.e(TAG, "XrayBridge.start failed", e)
                 stopWithError("Xray не стартовал: ${e.message}")
+                return@launch
+            }
+
+            // Шаг 2 — стартуем tun2socks (hev-socks5-tunnel). Он читает
+            // packets из TUN-fd и форвардит их в xray's SOCKS5 inbound
+            // на 127.0.0.1:2081. БЕЗ него xray запущен, но никто его
+            // SOCKS5 не дёргает — TUN-fd накапливает пакеты впустую.
+            try {
+                HevTunnel.start(applicationContext, tunFd)
+                Log.i(TAG, "HevTunnel.start OK — TUN packets forwarding via SOCKS5")
+            } catch (e: Throwable) {
+                Log.e(TAG, "HevTunnel.start failed", e)
+                stopWithError("tun2socks не стартовал: ${e.message}")
                 return@launch
             }
         }
@@ -222,6 +239,14 @@ class KaproVpnService : VpnService() {
 
     private fun disconnect() {
         scope.launch {
+            // Останавливаем в обратном порядке от start'а: сначала tun2socks
+            // (чтобы он перестал читать с TUN и слать в SOCKS5), потом xray
+            // (некому больше держать SOCKS-сессии), потом закрываем TUN-fd.
+            try {
+                HevTunnel.stop()
+            } catch (e: Throwable) {
+                Log.w(TAG, "HevTunnel.stop failed (ignored)", e)
+            }
             try {
                 XrayBridge.stop()
             } catch (e: Throwable) {
@@ -236,6 +261,7 @@ class KaproVpnService : VpnService() {
 
     private fun stopWithError(message: String) {
         Log.e(TAG, "stopWithError: $message")
+        try { HevTunnel.stop() } catch (_: Throwable) {}
         tun?.runCatching { close() }
         tun = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -303,8 +329,9 @@ class KaproVpnService : VpnService() {
         startJob?.cancel()
         stateObserver?.cancel()
         scope.cancel()
+        // Best-effort cleanup. tun2socks first (читал TUN), потом xray.
+        try { HevTunnel.stop() } catch (_: Throwable) {}
         try {
-            // Бест-эффорт остановка xray — если ещё работает, выключаем.
             kotlinx.coroutines.runBlocking { XrayBridge.stop() }
         } catch (_: Throwable) {
         }
