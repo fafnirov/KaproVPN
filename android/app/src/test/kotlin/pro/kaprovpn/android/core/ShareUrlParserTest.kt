@@ -71,9 +71,27 @@ class ShareUrlParserTest {
     }
 
     @Test
-    fun `vless without fragment uses fallback name`() {
+    fun `vless without fragment falls back to host port`() {
+        // Изменилось в QR-name patch: вместо ugly "vless-example.com" даём
+        // "example.com:443" — protocol уже виден в chip, дублировать незачем.
         val cfg = ShareUrlParser.parse("vless://uuid@example.com:443?security=tls")
-        assertEquals("vless-example.com", cfg.name)
+        assertEquals("example.com:443", cfg.name)
+    }
+
+    @Test
+    fun `vless with empty fragment also falls back`() {
+        // URL с явно пустым #fragment (vless://...#) не должен превратиться
+        // в пустое имя — fallback должен сработать.
+        val cfg = ShareUrlParser.parse("vless://uuid@10.0.0.5:30443?security=reality&pbk=k#")
+        assertEquals("10.0.0.5:30443", cfg.name)
+    }
+
+    @Test
+    fun `vless fragment with emoji name`() {
+        // Provider-style имена часто содержат флаги + emoji + dashes.
+        val url = "vless://uuid@host:443?security=tls#%F0%9F%87%B3%F0%9F%87%B1%20NL-Amsterdam-1"
+        val cfg = ShareUrlParser.parse(url)
+        assertEquals("🇳🇱 NL-Amsterdam-1", cfg.name)
     }
 
     // -- VMESS ----------------------------------------------------------------
@@ -272,6 +290,46 @@ class ShareUrlParserTest {
         // "hello" → standard b64 "aGVsbG8=" → URL-safe no-pad "aGVsbG8"
         val bytes = ShareUrlParser.b64DecodePadded("aGVsbG8")
         assertEquals("hello", String(bytes))
+    }
+
+    // -- name fallbacks (#fragment + default) ---------------------------------
+
+    @Test
+    fun `trojan without fragment falls back to host port`() {
+        val cfg = ShareUrlParser.parse("trojan://pass@example.com:443?security=tls")
+        assertEquals("example.com:443", cfg.name)
+    }
+
+    @Test
+    fun `trojan fragment wins over fallback`() {
+        val cfg = ShareUrlParser.parse("trojan://pass@example.com:443?security=tls#My%20Trojan")
+        assertEquals("My Trojan", cfg.name)
+    }
+
+    @Test
+    fun `shadowsocks without fragment falls back to host port`() {
+        // SIP002 with method:password base64-encoded in userinfo
+        val cred = java.util.Base64.getEncoder().encodeToString(
+            "chacha20-ietf-poly1305:secret".toByteArray()
+        )
+        val cfg = ShareUrlParser.parse("ss://$cred@ss.example.com:8388")
+        assertEquals("ss.example.com:8388", cfg.name)
+    }
+
+    @Test
+    fun `hysteria2 without fragment falls back to host port`() {
+        val cfg = ShareUrlParser.parse("hysteria2://pass@hy2.example.com:5678?sni=hy2.example.com")
+        assertEquals("hy2.example.com:5678", cfg.name)
+    }
+
+    @Test
+    fun `vmess without ps in JSON falls back to host port`() {
+        // VMess имя берётся не из #fragment, а из "ps" поля внутри base64 JSON.
+        // Пустое/отсутствующее ps → fallback.
+        val json = """{"v":"2","add":"vm.example.com","port":"443","id":"vmess-uuid","aid":"0","net":"tcp"}"""
+        val b64 = java.util.Base64.getEncoder().encodeToString(json.toByteArray())
+        val cfg = ShareUrlParser.parse("vmess://$b64")
+        assertEquals("vm.example.com:443", cfg.name)
     }
 }
 

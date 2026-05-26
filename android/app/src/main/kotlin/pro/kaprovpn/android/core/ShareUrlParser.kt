@@ -93,7 +93,7 @@ object ShareUrlParser {
             put("tls", buildTls(sni, insecure = insecure, alpn = alpn, utlsFp = utlsFp))
             buildTransport(net, qs, hostHeaderFallback = host)?.let { put("transport", it) }
         }
-        val name = u.fragment?.let { urlDecode(it) }.orEmpty().ifEmpty { "trojan-$host" }
+        val name = u.fragment?.let { urlDecode(it) }.orEmpty().ifEmpty { "$host:$port" }
         return ProxyConfig(name = name, protocol = "trojan", rawUrl = url, outbound = outbound)
     }
 
@@ -136,7 +136,7 @@ object ShareUrlParser {
             }
             buildTransport(net, qs, hostHeaderFallback = host)?.let { put("transport", it) }
         }
-        val name = u.fragment?.let { urlDecode(it) }.orEmpty().ifEmpty { "vless-$host" }
+        val name = u.fragment?.let { urlDecode(it) }.orEmpty().ifEmpty { "$host:$port" }
         return ProxyConfig(name = name, protocol = "vless", rawUrl = url, outbound = outbound)
     }
 
@@ -190,7 +190,7 @@ object ShareUrlParser {
             )
             buildTransport(net, qsLike, hostHeaderFallback = server)?.let { put("transport", it) }
         }
-        val name = data["ps"]?.asString().orEmpty().ifEmpty { "vmess-$server" }
+        val name = data["ps"]?.asString().orEmpty().ifEmpty { "$server:$port" }
         return ProxyConfig(name = name, protocol = "vmess", rawUrl = url, outbound = outbound)
     }
 
@@ -294,7 +294,7 @@ object ShareUrlParser {
             }
         }
         return ProxyConfig(
-            name = name.ifEmpty { "ss-$host" },
+            name = name.ifEmpty { "$host:$port" },
             protocol = "shadowsocks",
             rawUrl = url,
             outbound = outbound,
@@ -333,7 +333,7 @@ object ShareUrlParser {
                 })
             }
         }
-        val name = u.fragment?.let { urlDecode(it) }.orEmpty().ifEmpty { "hy2-$host" }
+        val name = u.fragment?.let { urlDecode(it) }.orEmpty().ifEmpty { "$host:$port" }
         return ProxyConfig(name = name, protocol = "hysteria2", rawUrl = url, outbound = outbound)
     }
 
