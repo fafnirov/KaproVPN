@@ -62,6 +62,7 @@
     <string name="configs_ping_pending">…</string>
     <string name="configs_ping_failed">недоступен</string>
     <string name="configs_ping_ms">%1$d мс</string>
+    <string name="configs_others_header">Другие серверы (%1$d)</string>
 
     <!-- Add config dialog -->
     <string name="add_dialog_title">Новый сервер</string>

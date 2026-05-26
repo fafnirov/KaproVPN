@@ -11,19 +11,25 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,16 +37,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import pro.kaprovpn.android.R
 import pro.kaprovpn.android.core.AppRepository
 import pro.kaprovpn.android.core.DnsOption
 import pro.kaprovpn.android.vpn.XrayBridge
 
+/**
+ * Settings — card-based layout. Каждая логическая группа в собственной
+ * `SectionCard` (icon + title + content). Никаких сложных эффектов:
+ * Material 3 surfaces + rounded corners 16dp. Должно летать на любом
+ * телефоне от 2018+.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(modifier: Modifier = Modifier) {
@@ -49,99 +63,147 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.tab_settings)) }) },
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        stringResource(R.string.tab_settings),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                },
+            )
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // -- DNS-сервер ----------------------------------------------
-            SectionHeader(stringResource(R.string.settings_dns_header))
-            Text(
-                stringResource(R.string.settings_dns_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // ── DNS ──
+            SectionCard(
+                icon = Icons.Filled.Dns,
+                title = stringResource(R.string.settings_dns_header),
+                hint = stringResource(R.string.settings_dns_hint),
+            ) {
+                DnsOption.ALL.forEachIndexed { idx, opt ->
+                    DnsOptionRow(
+                        option = opt,
+                        selected = settings.dnsOptionKey == opt.key,
+                        onSelect = { AppRepository.setDnsOption(opt.key) },
+                    )
+                    if (idx < DnsOption.ALL.lastIndex) Spacer(Modifier.size(6.dp))
+                }
+            }
 
-            DnsOption.ALL.forEach { opt ->
-                DnsOptionRow(
-                    option = opt,
-                    selected = settings.dnsOptionKey == opt.key,
-                    onSelect = { AppRepository.setDnsOption(opt.key) },
+            // ── Поведение ──
+            SectionCard(
+                icon = Icons.Filled.Tune,
+                title = stringResource(R.string.settings_behavior_header),
+            ) {
+                ToggleRow(
+                    title = stringResource(R.string.settings_autoconnect_title),
+                    subtitle = stringResource(R.string.settings_autoconnect_subtitle),
+                    checked = settings.autoconnectOnLaunch,
+                    onCheckedChange = { AppRepository.setAutoconnect(it) },
+                )
+                Spacer(Modifier.size(8.dp))
+                ToggleRow(
+                    title = stringResource(R.string.settings_subrefresh_title),
+                    subtitle = stringResource(R.string.settings_subrefresh_subtitle),
+                    checked = settings.subscriptionAutorefresh,
+                    onCheckedChange = { AppRepository.setSubscriptionAutorefresh(it) },
                 )
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // -- Поведение -----------------------------------------------
-            SectionHeader(stringResource(R.string.settings_behavior_header))
-            SettingsToggleRow(
-                title = stringResource(R.string.settings_autoconnect_title),
-                subtitle = stringResource(R.string.settings_autoconnect_subtitle),
-                checked = settings.autoconnectOnLaunch,
-                onCheckedChange = { AppRepository.setAutoconnect(it) },
-            )
-            SettingsToggleRow(
-                title = stringResource(R.string.settings_subrefresh_title),
-                subtitle = stringResource(R.string.settings_subrefresh_subtitle),
-                checked = settings.subscriptionAutorefresh,
-                onCheckedChange = { AppRepository.setSubscriptionAutorefresh(it) },
-            )
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // -- Kill-switch / Always-on VPN -----------------------------
-            // Android умеет блокировать сетевой трафик когда VPN неактивен —
-            // это и есть «kill-switch». Включается в системных настройках,
-            // не в нашем приложении. Здесь — link на эти настройки + hint.
-            SectionHeader(stringResource(R.string.settings_alwayson_title))
-            Text(
-                stringResource(R.string.settings_alwayson_subtitle),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // ── Always-on VPN / kill-switch ──
             val context = LocalContext.current
-            OutlinedButton(onClick = {
-                runCatching {
-                    val intent = Intent(Settings.ACTION_VPN_SETTINGS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                }
-            }) {
-                Text(stringResource(R.string.settings_alwayson_open))
+            SectionCard(
+                icon = Icons.Filled.Shield,
+                title = stringResource(R.string.settings_alwayson_title),
+                hint = stringResource(R.string.settings_alwayson_subtitle),
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            val intent = Intent(Settings.ACTION_VPN_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(R.string.settings_alwayson_open)) }
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            // ── About ──
+            SectionCard(
+                icon = Icons.Filled.Info,
+                title = stringResource(R.string.settings_about_header),
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_xray_version, coreVersion),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.size(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_app_version),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
-            // -- О приложении --------------------------------------------
-            SectionHeader(stringResource(R.string.settings_about_header))
-            Text(
-                text = stringResource(R.string.settings_xray_version, coreVersion),
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = stringResource(R.string.settings_app_version),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(Modifier.padding(bottom = 16.dp))
+            Spacer(Modifier.size(8.dp))
         }
     }
 }
 
+/**
+ * Reusable section card. Заголовок с иконкой слева; ниже — `hint`
+ * описание (опционально) и пользовательский content slot.
+ */
 @Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary,
-    )
+private fun SectionCard(
+    icon: ImageVector,
+    title: String,
+    hint: String? = null,
+    content: @Composable () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        if (hint != null) {
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        content()
+    }
 }
 
 @Composable
@@ -150,24 +212,20 @@ private fun DnsOptionRow(
     selected: Boolean,
     onSelect: () -> Unit,
 ) {
-    val container = if (selected)
-        MaterialTheme.colorScheme.primaryContainer
-    else MaterialTheme.colorScheme.surfaceVariant
     val isRussian = LocalConfiguration.current.locales[0].language == "ru"
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(container)
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer
+                else androidx.compose.ui.graphics.Color.Transparent
+            )
             .clickable { onSelect() }
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(horizontal = 8.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(
-            selected = selected,
-            onClick = onSelect,
-        )
+        RadioButton(selected = selected, onClick = onSelect)
         Spacer(Modifier.width(4.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -184,7 +242,7 @@ private fun DnsOptionRow(
 }
 
 @Composable
-private fun SettingsToggleRow(
+private fun ToggleRow(
     title: String,
     subtitle: String,
     checked: Boolean,
@@ -194,7 +252,7 @@ private fun SettingsToggleRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onCheckedChange(!checked) }
-            .padding(vertical = 8.dp),
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -205,6 +263,7 @@ private fun SettingsToggleRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        Spacer(Modifier.width(12.dp))
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

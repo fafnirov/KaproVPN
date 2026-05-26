@@ -62,6 +62,7 @@
     <string name="configs_ping_pending">…</string>
     <string name="configs_ping_failed">unreachable</string>
     <string name="configs_ping_ms">%1$d ms</string>
+    <string name="configs_others_header">Other servers (%1$d)</string>
 
     <!-- Add config dialog -->
     <string name="add_dialog_title">New server</string>

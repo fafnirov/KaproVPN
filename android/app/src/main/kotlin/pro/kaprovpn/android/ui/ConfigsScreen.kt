@@ -2,7 +2,9 @@ package pro.kaprovpn.android.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,8 +29,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -40,7 +41,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import pro.kaprovpn.android.R
@@ -61,7 +62,16 @@ import pro.kaprovpn.android.core.AppRepository
 import pro.kaprovpn.android.core.ParseError
 import pro.kaprovpn.android.core.ProxyConfig
 import pro.kaprovpn.android.core.ShareUrlParser
+import pro.kaprovpn.android.core.serverHostPort
 
+/**
+ * Servers — список конфигов. Layout:
+ * - Hero card сверху (активный сервер) — visually prominent, янтарный border
+ * - Section header "Все серверы (N)"
+ * - Compact LazyColumn с остальными
+ *
+ * Если конфигов нет — Onboarding 3-cards (Phase 15 unchanged).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConfigsScreen(modifier: Modifier = Modifier) {
@@ -75,11 +85,20 @@ fun ConfigsScreen(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    val activeConfig = configs.find { it.name == activeName }
+    val otherConfigs = configs.filterNot { it.name == activeName }
+
     Scaffold(
         modifier = modifier,
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.tab_configs)) },
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        stringResource(R.string.tab_configs),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                },
                 actions = {
                     IconButton(
                         onClick = { scope.launch { AppRepository.pingAll() } },
@@ -125,10 +144,33 @@ fun ConfigsScreen(modifier: Modifier = Modifier) {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(configs, key = { it.name }) { cfg ->
-                    ConfigRow(
+                // Hero — активный конфиг (если есть)
+                if (activeConfig != null) {
+                    item(key = "hero-${activeConfig.name}") {
+                        ActiveServerHero(
+                            config = activeConfig,
+                            ping = pings[activeConfig.name] ?: AppRepository.PingState.NotMeasured,
+                            onDelete = { AppRepository.removeConfig(activeConfig.name) },
+                        )
+                        Spacer(Modifier.size(8.dp))
+                    }
+                }
+
+                // Section header for others
+                if (otherConfigs.isNotEmpty()) {
+                    item(key = "others-header") {
+                        Text(
+                            text = stringResource(R.string.configs_others_header, otherConfigs.size),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 4.dp),
+                        )
+                    }
+                }
+
+                items(otherConfigs, key = { it.name }) { cfg ->
+                    CompactConfigRow(
                         config = cfg,
-                        isActive = cfg.name == activeName,
                         ping = pings[cfg.name] ?: AppRepository.PingState.NotMeasured,
                         onSelect = { AppRepository.setActiveConfig(cfg.name) },
                         onDelete = { AppRepository.removeConfig(cfg.name) },
@@ -163,75 +205,145 @@ fun ConfigsScreen(modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * Hero-card для активного сервера. Янтарный border + bigger padding,
+ * имя крупным шрифтом, под ним — chip с протоколом + ping + host:port.
+ */
 @Composable
-private fun ConfigRow(
+private fun ActiveServerHero(
     config: ProxyConfig,
-    isActive: Boolean,
+    ping: AppRepository.PingState,
+    onDelete: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(
+                BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
+                RoundedCornerShape(16.dp),
+            )
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.configs_active_marker),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.weight(1f))
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = stringResource(R.string.configs_delete),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.size(6.dp))
+            Text(
+                text = config.name,
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.size(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ProtocolChip(config.protocol.uppercase())
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = config.serverHostPort(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                PingBadge(ping)
+            }
+        }
+    }
+}
+
+/** Компактная строка для НЕ-активных. Tap → set active, delete-icon справа. */
+@Composable
+private fun CompactConfigRow(
+    config: ProxyConfig,
     ping: AppRepository.PingState,
     onSelect: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onSelect() },
-        colors = CardDefaults.cardColors(
-            containerColor = if (isActive)
-                MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant
-        ),
-        shape = RoundedCornerShape(12.dp),
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable { onSelect() }
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (isActive) MaterialTheme.colorScheme.primary
-                        else Color.Transparent
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (isActive) Icon(
-                    Icons.Filled.Check,
-                    contentDescription = stringResource(R.string.configs_active_marker),
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(config.name, style = MaterialTheme.typography.titleSmall)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                config.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     config.protocol,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = config.serverHostPort(),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            PingBadge(ping)
-            Spacer(Modifier.width(4.dp))
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = stringResource(R.string.configs_delete),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        }
+        PingBadge(ping)
+        Spacer(Modifier.width(4.dp))
+        IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = stringResource(R.string.configs_delete),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
+}
+
+@Composable
+private fun ProtocolChip(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onPrimary,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.primary)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }
 
 @Composable
 private fun PingBadge(state: AppRepository.PingState) {
     val (text, color) = when (state) {
         is AppRepository.PingState.Ok -> stringResource(R.string.configs_ping_ms, state.ms) to
-            // Цветовая индикация: <100мс — зелёный, <300мс — янтарный, >300 — красный
             when {
                 state.ms < 100 -> MaterialTheme.colorScheme.primary
                 state.ms < 300 -> MaterialTheme.colorScheme.secondary
@@ -245,20 +357,10 @@ private fun PingBadge(state: AppRepository.PingState) {
             "" to MaterialTheme.colorScheme.onSurfaceVariant
     }
     if (text.isNotEmpty()) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-        )
+        Text(text = text, style = MaterialTheme.typography.labelSmall, color = color)
     }
 }
 
-/**
- * Onboarding-стиль empty state — 3 пути для нового пользователя:
- * subscription URL, single share-URL, или landing site если провайдера
- * вообще нет. Аналог `kapro_vpn/gui/onboarding.py` с десктопа. Скрывается
- * как только в списке появляется хотя бы один конфиг.
- */
 @Composable
 private fun OnboardingEmptyState(
     modifier: Modifier = Modifier,
@@ -276,6 +378,7 @@ private fun OnboardingEmptyState(
         Text(
             stringResource(R.string.configs_empty_title),
             style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold,
         )
         Text(
             stringResource(R.string.configs_empty_hint),
@@ -314,32 +417,23 @@ private fun OnboardingPathCard(
     subtitle: String,
     onClick: () -> Unit,
 ) {
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() },
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        shape = RoundedCornerShape(12.dp),
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable { onClick() }
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Text(
+            subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
-
-/** Landing-страница c инструкциями и partner-провайдерами.
- *  Совпадает с `SETUP_GUIDE_URL` из десктопного `gui/onboarding.py`. */
-private const val LANDING_URL = "https://kaprovpn.pro/"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -399,3 +493,5 @@ private fun AddConfigDialog(
         },
     )
 }
+
+private const val LANDING_URL = "https://kaprovpn.pro/"
