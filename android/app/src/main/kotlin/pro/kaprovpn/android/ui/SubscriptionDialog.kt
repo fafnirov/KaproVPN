@@ -114,7 +114,10 @@ fun SubscriptionDialog(
                         loading = true
                         scope.launch {
                             try {
-                                result = Subscription.import(url.trim())
+                                // DPI-fallback автоматический — если direct
+                                // упал из-за российского блока И VPN активен,
+                                // retry через локальный xray-туннель.
+                                result = Subscription.importWithDpiFallback(url.trim())
                                 if (result?.configs?.isEmpty() == true) {
                                     error = context.getString(R.string.sub_dialog_no_results)
                                 }
@@ -173,6 +176,13 @@ private fun ResultSummary(r: Subscription.Result) {
                 text = if (rest != null) "$preview\n$rest" else preview,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (r.viaProxy) {
+            Text(
+                stringResource(R.string.sub_dialog_via_proxy),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
             )
         }
     }

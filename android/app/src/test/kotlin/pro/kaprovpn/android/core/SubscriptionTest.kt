@@ -1,6 +1,7 @@
 package pro.kaprovpn.android.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Base64
@@ -95,5 +96,63 @@ class SubscriptionTest {
         assertEquals(1, result.errors.size)
         assertTrue("error должна содержать обрезанный URL",
             result.errors[0].contains("vless://uuid@host"))
+    }
+
+    // -- DPI fallback detection -----------------------------------------------
+
+    @Test
+    fun `looksLikeDpiBlock catches SSLException`() {
+        val e = javax.net.ssl.SSLHandshakeException("Remote host closed connection during handshake")
+        assertTrue(Subscription.looksLikeDpiBlock(e))
+    }
+
+    @Test
+    fun `looksLikeDpiBlock catches connection reset`() {
+        val e = java.net.SocketException("Connection reset by peer")
+        assertTrue(Subscription.looksLikeDpiBlock(e))
+    }
+
+    @Test
+    fun `looksLikeDpiBlock catches EOFException`() {
+        val e = java.io.EOFException("unexpected EOF during TLS handshake")
+        assertTrue(Subscription.looksLikeDpiBlock(e))
+    }
+
+    @Test
+    fun `looksLikeDpiBlock catches wrapped SSL exceptions`() {
+        // urllib-style: java.io.IOException wraps SSLException
+        val cause = javax.net.ssl.SSLException("handshake_failure")
+        val wrapped = java.io.IOException("Network error", cause)
+        assertTrue("wrapped SSL exception должен ловиться через cause-chain",
+            Subscription.looksLikeDpiBlock(wrapped))
+    }
+
+    @Test
+    fun `looksLikeDpiBlock returns false for non-DPI failures`() {
+        // 404, timeout, DNS — это НЕ DPI блок
+        assertFalse(Subscription.looksLikeDpiBlock(
+            java.io.IOException("HTTP 404 от https://example.com: Not Found")
+        ))
+        assertFalse(Subscription.looksLikeDpiBlock(
+            java.net.UnknownHostException("nope.invalid")
+        ))
+    }
+
+    @Test
+    fun `probeLocalProxy returns false for non-listening port`() {
+        // Случайный высокий порт где никто не слушает.
+        assertFalse(Subscription.probeLocalProxy("127.0.0.1", 31337, timeoutMs = 200))
+    }
+
+    @Test
+    fun `viaProxy defaults to false`() {
+        val r = Subscription.resultFromBody(sample1)
+        assertFalse(r.viaProxy)
+    }
+
+    @Test
+    fun `viaProxy = true когда указан в resultFromBody`() {
+        val r = Subscription.resultFromBody(sample1, viaProxy = true)
+        assertTrue(r.viaProxy)
     }
 }

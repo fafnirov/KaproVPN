@@ -84,6 +84,7 @@
     <string name="sub_dialog_summary">Found %1$d servers</string>
     <string name="sub_dialog_summary_with_errors">Found %1$d servers (%2$d errors)</string>
     <string name="sub_dialog_more_servers">…and %1$d more</string>
+    <string name="sub_dialog_via_proxy">⚡ Fetched through the active VPN tunnel (direct fetch was DPI-blocked)</string>
 
     <!-- Settings screen -->
     <string name="settings_dns_header">DNS server</string>

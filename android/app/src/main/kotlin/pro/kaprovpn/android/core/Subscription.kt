@@ -3,8 +3,12 @@ package pro.kaprovpn.android.core
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.Socket
 import java.net.URI
 import java.util.Base64
+import javax.net.ssl.SSLException
 
 /**
  * Импорт подписок — порт `kapro_vpn/core/subscription.py`.
@@ -50,6 +54,9 @@ object Subscription {
         val configs: List<ProxyConfig>,
         val errors: List<String>,
         val rawLines: Int,
+        /** true если fetch прошёл через локальный xray-туннель (DPI-fallback).
+         *  Используется UI чтобы показать «загружено через VPN». */
+        val viaProxy: Boolean = false,
     )
 
     /**
@@ -100,7 +107,7 @@ object Subscription {
      * было использовать на manually-pasted body (когда сервер блокирует
      * запросы из приложений — пользователь копирует тело из браузера).
      */
-    fun resultFromBody(body: String): Result {
+    fun resultFromBody(body: String, viaProxy: Boolean = false): Result {
         val shareUrls = parseBody(body)
         val configs = mutableListOf<ProxyConfig>()
         val errors = mutableListOf<String>()
@@ -112,18 +119,31 @@ object Subscription {
                 errors.add("$short — ${e.message}")
             }
         }
-        return Result(configs = configs, errors = errors, rawLines = shareUrls.size)
+        return Result(
+            configs = configs,
+            errors = errors,
+            rawLines = shareUrls.size,
+            viaProxy = viaProxy,
+        )
     }
 
     /**
      * Скачать subscription URL + распарсить. Suspend — внутри переключается
      * на [Dispatchers.IO] потому что [HttpURLConnection] блокирующий.
      *
+     * @param proxy если задан — fetch идёт через локальный HTTP-proxy
+     *   (наш xray http-inbound при активном VPN). null = direct.
+     *
      * Бросает [java.io.IOException] на сетевые проблемы (timeout, DNS,
      * 4xx/5xx). UI ловит и показывает.
      */
-    suspend fun import(url: String): Result = withContext(Dispatchers.IO) {
-        val conn = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
+    suspend fun import(url: String, proxy: Proxy? = null): Result = withContext(Dispatchers.IO) {
+        val rawConn = if (proxy != null) {
+            URI(url).toURL().openConnection(proxy)
+        } else {
+            URI(url).toURL().openConnection()
+        }
+        val conn = (rawConn as HttpURLConnection).apply {
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             requestMethod = "GET"
@@ -142,9 +162,81 @@ object Subscription {
                 )
             }
             val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            resultFromBody(body)
+            resultFromBody(body, viaProxy = proxy != null)
         } finally {
             conn.disconnect()
         }
     }
+
+    /**
+     * Импорт с автоматическим DPI-fallback. Pattern с десктопа
+     * (`subscription.import_with_dpi_fallback`):
+     *
+     *   1. Пробуем direct fetch — fast path, не нагружаем туннель зря.
+     *   2. Если упало с DPI-сигнатурой (TLS-handshake reset / EOF) И
+     *      локальный xray-proxy слушает на [LOCAL_PROXY_HOST]:[LOCAL_PROXY_PORT]
+     *      — retry через него. Подписка летит шифрованно через VPN-сервер,
+     *      DPI не видит inner request.
+     *   3. Если direct упал НЕ из-за DPI — пробрасываем оригинальное
+     *      исключение (DNS, 4xx, timeout — не наша проблема).
+     *   4. Если direct упал из-за DPI НО туннель не активен — тоже
+     *      пробрасываем оригинал чтобы UI показал «подключись сначала».
+     */
+    suspend fun importWithDpiFallback(
+        url: String,
+        localProxyHost: String = LOCAL_PROXY_HOST,
+        localProxyPort: Int = LOCAL_PROXY_PORT,
+    ): Result {
+        val directError: Throwable = try {
+            return import(url)
+        } catch (e: Throwable) { e }
+
+        if (!looksLikeDpiBlock(directError)) {
+            throw directError
+        }
+        if (!probeLocalProxy(localProxyHost, localProxyPort)) {
+            // Туннель не активен — fallback некуда. Surface'им оригинальную
+            // DPI-ошибку, UI говорит «подключись сначала».
+            throw directError
+        }
+        val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress(localProxyHost, localProxyPort))
+        return import(url, proxy = proxy)
+    }
+
+    /** Сигнатура российского DPI: TLS-handshake RST'ится middle of
+     *  ClientHello. Наружу всплывает как [SSLException] / SocketException
+     *  с фразами "reset" / "EOF" / etc. */
+    internal fun looksLikeDpiBlock(err: Throwable): Boolean {
+        // Type-based check — точнее чем строки. SSLException + любые wrapping.
+        var e: Throwable? = err
+        while (e != null) {
+            if (e is SSLException) return true
+            if (e is java.io.EOFException) return true
+            e = e.cause
+        }
+        // Fallback на substring — wrapping в IOException делает type-check
+        // недостаточным.
+        val msg = err.message?.lowercase() ?: return false
+        return msg.contains("connection reset") ||
+            msg.contains("connection aborted") ||
+            msg.contains("unexpected_eof") ||
+            msg.contains("ssl handshake") ||
+            msg.contains("remote host closed")
+    }
+
+    /** TCP-probe: что-то слушает [host]:[port]? Короткий timeout (500мс) —
+     *  если xray не запущен, не хотим висеть. */
+    internal fun probeLocalProxy(host: String, port: Int, timeoutMs: Int = 500): Boolean = try {
+        Socket().use { sock ->
+            sock.connect(InetSocketAddress(host, port), timeoutMs)
+            true
+        }
+    } catch (_: Throwable) {
+        false
+    }
+
+    /** Локальный HTTP-inbound xray. Совпадает с
+     *  `XrayConfigBuilder.DEFAULT_LISTEN_HOST/PORT`. */
+    private const val LOCAL_PROXY_HOST = "127.0.0.1"
+    private const val LOCAL_PROXY_PORT = 2080
 }

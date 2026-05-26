@@ -84,6 +84,7 @@
     <string name="sub_dialog_summary">Найдено %1$d серверов</string>
     <string name="sub_dialog_summary_with_errors">Найдено %1$d серверов (%2$d ошибок)</string>
     <string name="sub_dialog_more_servers">…ещё %1$d</string>
+    <string name="sub_dialog_via_proxy">⚡ Загружено через активный VPN-туннель (direct fetch был заблокирован DPI)</string>
 
     <!-- Settings screen -->
     <string name="settings_dns_header">DNS-сервер</string>
