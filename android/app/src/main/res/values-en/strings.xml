@@ -106,6 +106,8 @@
     <string name="vpn_notification_channel_desc">Active VPN tunnel notification</string>
     <string name="vpn_notification_connecting">KaproVPN — connecting…</string>
     <string name="vpn_notification_connected">KaproVPN — connected</string>
+    <string name="vpn_notification_stopping">KaproVPN — disconnecting…</string>
+    <string name="vpn_notification_failed">KaproVPN — error</string>
     <string name="vpn_notification_disconnect">Disconnect</string>
 
     <!-- Quick Settings tile -->

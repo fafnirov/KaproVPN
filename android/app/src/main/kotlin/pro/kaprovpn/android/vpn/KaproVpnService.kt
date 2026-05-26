@@ -91,10 +91,26 @@ class KaproVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var tun: ParcelFileDescriptor? = null
     private var startJob: Job? = null
+    private var stateObserver: Job? = null
+    private var currentSessionName: String = "KaproVPN"
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Notification следует state'у Xray live: connect → connecting →
+        // connected → (если упало) failed. Без этого notification врал
+        // бы что подключено когда xray умер посередине сессии.
+        stateObserver = scope.launch {
+            XrayBridge.state.collect { state ->
+                val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                // Не вызываем startForeground — только update existing
+                // notification. (Изначальный startForeground делается
+                // в connect() перед buildTun.)
+                if (state !is XrayBridge.State.Idle) {
+                    nm.notify(NOTIFICATION_ID, buildNotification(currentSessionName, state))
+                }
+            }
+        }
         Log.i(TAG, "onCreate")
     }
 
@@ -171,7 +187,11 @@ class KaproVpnService : VpnService() {
             return
         }
 
-        startForeground(NOTIFICATION_ID, buildNotification(sessionName, connecting = true))
+        currentSessionName = sessionName
+        startForeground(
+            NOTIFICATION_ID,
+            buildNotification(sessionName, XrayBridge.State.Starting),
+        )
 
         startJob = scope.launch {
             val pfd: ParcelFileDescriptor = try {
@@ -190,14 +210,13 @@ class KaproVpnService : VpnService() {
 
             try {
                 XrayBridge.start(configJson, tunFd)
+                // Дальнейшие обновления notification идут через
+                // stateObserver Flow-collector в onCreate.
             } catch (e: Throwable) {
                 Log.e(TAG, "XrayBridge.start failed", e)
                 stopWithError("Xray не стартовал: ${e.message}")
                 return@launch
             }
-
-            // Подключено — обновляем notification (убираем "подключается…")
-            startForeground(NOTIFICATION_ID, buildNotification(sessionName, connecting = false))
         }
     }
 
@@ -282,6 +301,7 @@ class KaproVpnService : VpnService() {
     override fun onDestroy() {
         Log.i(TAG, "onDestroy")
         startJob?.cancel()
+        stateObserver?.cancel()
         scope.cancel()
         try {
             // Бест-эффорт остановка xray — если ещё работает, выключаем.
@@ -309,7 +329,7 @@ class KaproVpnService : VpnService() {
         })
     }
 
-    private fun buildNotification(sessionName: String, connecting: Boolean): Notification {
+    private fun buildNotification(sessionName: String, state: XrayBridge.State): Notification {
         val openAppIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).apply {
@@ -323,13 +343,22 @@ class KaproVpnService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE,
         )
 
+        val titleRes = when (state) {
+            XrayBridge.State.Starting -> R.string.vpn_notification_connecting
+            XrayBridge.State.Connected -> R.string.vpn_notification_connected
+            XrayBridge.State.Stopping -> R.string.vpn_notification_stopping
+            is XrayBridge.State.Failed -> R.string.vpn_notification_failed
+            XrayBridge.State.Idle -> R.string.vpn_notification_connected  // транзитное, скоро уйдёт
+        }
+        val text = when (state) {
+            is XrayBridge.State.Failed -> state.reason
+            else -> sessionName
+        }
+
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(getString(
-                if (connecting) R.string.vpn_notification_connecting
-                else R.string.vpn_notification_connected
-            ))
-            .setContentText(sessionName)
+            .setContentTitle(getString(titleRes))
+            .setContentText(text)
             .setOngoing(true)
             .setContentIntent(openAppIntent)
             .addAction(0, getString(R.string.vpn_notification_disconnect), stopIntent)

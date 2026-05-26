@@ -106,6 +106,8 @@
     <string name="vpn_notification_channel_desc">Уведомление активного VPN-туннеля</string>
     <string name="vpn_notification_connecting">KaproVPN — подключение…</string>
     <string name="vpn_notification_connected">KaproVPN — подключено</string>
+    <string name="vpn_notification_stopping">KaproVPN — отключение…</string>
+    <string name="vpn_notification_failed">KaproVPN — ошибка</string>
     <string name="vpn_notification_disconnect">Отключить</string>
 
     <!-- Quick Settings tile -->
