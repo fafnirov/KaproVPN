@@ -1,224 +1,97 @@
 # KaproVPN — Android-клиент
 
-Нативный Android-клиент KaproVPN на **Kotlin + Jetpack Compose**. Использует
-**Xray-core** как прокси-движок и **VpnService** для системного TUN.
+Нативный Android-клиент KaproVPN на **Kotlin + Jetpack Compose**.
+Использует **Xray-core** (через libv2ray.aar) как прокси-движок,
+**hev-socks5-tunnel** как tun2socks-мост и системный **VpnService** под TUN.
 
-Десктоп-аналог — в `../kapro_vpn/` (Python + PySide6). Архитектурно мы
-переносим только `core/` (парсеры share-URL, генератор Xray-конфига,
-подписки) — VPN-плоскость пишется с нуля под Android.
+Десктоп-аналог — в `../kapro_vpn/` (Python + PySide6, Windows). Архитектурно
+переносим только `core/`: парсеры share-URL, генератор Xray-конфига,
+работа с подписками. Сетевая плоскость (TUN, routing, lifecycle) написана с
+нуля под Android — десктопная Windows-специфика (system_proxy,
+network_routes, killswitch, autostart) сюда не идёт.
 
 ## Статус
 
-🚧 **v0.1.0-dev** — Phase 1 закрыта.
+🚧 **v0.1.0-dev** — pre-release, тестируется на эмуляторе. Готовится к
+первому signed-релизу для раздачи знакомым / в Telegram.
 
-**Готово:**
-- Gradle 8.10.2 + AGP 8.7.3 + Kotlin 2.0.21 + Compose BOM 2024.10.01 ✓
-- Compose Hello-world на тёмной янтарной теме ✓
-- `core.ShareUrlParser` — порт `kapro_vpn/core/parser.py`,
-  4 протокола (vless, vmess, trojan, ss) + hysteria2.
-  Permissive splitter — корректно ест кириллицу/пробелы во fragment ✓
-- `core.XrayConfigBuilder` — порт `kapro_vpn/core/xray_config.py`,
-  Xray-JSON со split-routing (geoip:private + domain:rules) ✓
-- 22 unit-теста, `./gradlew :app:testDebugUnitTest` зелёные ✓
-- `default_sites.json` синкается из `../kapro_vpn/data/` build-task'ом ✓
+## Что умеет
 
-**Phase 2 — libv2ray интеграция (done):**
-- `libv2ray.aar` v26.5.19 (2dust/AndroidLibXrayLite) подключён через
-  Gradle download-task — файл качается локально на первый build
-  (~55 MB), gitignore'нится ✓
-- `vpn.XrayBridge` — Kotlin singleton-обёртка вокруг `CoreController`:
-  `coreVersion()`, `init(context)`, state-флоу, log-флоу.
-  Полное API (start/stop/queryStats) — TODO Phase 3 ✓
-- Smoke-кнопка "Проверить Xray-core" на HomeScreen зовёт
-  `Libv2ray.checkVersionX()` через JNI ✓
-- `./gradlew :app:assembleDebug` зелёный, APK 150 MB debug
-  (4 ABI + Xray-core) ✓
-- **Smoke-test прогнан на AVD (x86_64, Android 17):
-  `Lib v37, Xray-core v26.5.9` — JNI работает, .so грузится** ✓
+**Подключение и протоколы:**
+- VLESS (включая REALITY с pbk/sid/spx), VMess, Trojan, Shadowsocks
+  (SIP002 + legacy base64), Hysteria2/HY2 — парсинг + sing-box-style
+  outbound. Совместимо с десктоп-клиентом — те же подписки дают тот же
+  результат.
+- Полноценный TUN-туннель: VpnService → `libhev-socks5-tunnel.so` →
+  локальный SOCKS5 → Xray-core → апстрим. Не proxy-only режим — весь
+  системный трафик идёт через VPN.
+- Split-routing — 168 RU-доменов (банки, госуслуги, маркетплейсы) идут
+  напрямую. Источник — общий `../kapro_vpn/data/default_sites.json`,
+  синкается build-task'ом в assets на каждой сборке.
 
-**Phase 3 — VpnService + TUN (готово, ждёт e2e):**
-- `vpn.KaproVpnService` (extends `VpnService`) — TUN-интерфейс через
-  `Builder.addAddress/addRoute/addDnsServer/setMtu/establish`, foreground
-  с notification + действие «Отключить» ✓
-- `XrayBridge.start(config, tunFd)` + `stop()` — suspend через
-  `Dispatchers.IO`, сериализация через `Mutex`. Распаковка
-  `geoip.dat`/`geosite.dat` из AAR-assets в env-dir на init ✓
-- `MainActivity` — VPN permission flow через
-  `registerForActivityResult(StartActivityForResult())` ✓
-- `HomeScreen` — `OutlinedTextField` для share-URL, кнопка
-  ВКЛЮЧИТЬ парсит → `XrayConfigBuilder` → стартует сервис;
-  state наблюдается через `XrayBridge.state` ✓
-- Manifest: service зарегистрирован с `BIND_VPN_SERVICE` и
-  `foregroundServiceType=specialUse` ✓
-- `./gradlew :app:assembleDebug` зелёный ✓
-- E2E на устройстве: **требует валидный share-URL** — пользователь
-  должен вставить свой.
+**DNS и приватность:**
+- 4 опции DNS: System / AdGuard (ad-block через `geosite:category-ads-all`,
+  ~10k доменов в blackhole) / Cloudflare / Quad9 — каждая со своим
+  DoH-серверами.
+- DNS-leak hardening: запросы к публичным резолверам
+  (Cloudflare/Google/Quad9/Yandex) и весь UDP/TCP port 53 forced-direct.
+- `log.access: none` — никакой истории браузинга на диске.
+- `configs.json` шифруется AES-256-GCM через Android Keystore.
+  Старые plain-конфиги автоматически мигрируются на следующий save.
+- Per-app split tunneling — пакеты-исключения ходят мимо VPN
+  (банковские клиенты, Telegram).
 
-**Resync под десктоп v1.9.x — DNS / privacy:**
-- `core.DnsOption` — порт `dns_options.py`. 4 опции: System / AdGuard /
-  Cloudflare / Quad9. Каждая знает свои DoH-URLs, plain-IP, bypass-IP ✓
-- `XrayConfigBuilder` обновлён: DNS-leak hardening (Cloudflare /32, Google /32,
-  Quad9 /32, Yandex /32 → direct), UDP/TCP port 53 → direct, AdGuard
-  ad-block rule (`geosite:category-ads-all` → block), DoH dns-block
-  для non-System options, `log.access: none` (privacy: без полной
-  истории браузинга на диске) ✓
-- `KaproVpnService` принимает `tunDnsServers` + `dnsBypassIps`; на
-  Android 13+ exclude-routes через `Builder.excludeRoute()` для DNS-IP ✓
-- 31 unit-тест (22 парсер + 9 на XrayConfigBuilder) зелёные ✓
+**Подписки и серверы:**
+- Импорт subscription URL (plain, base64, URL-safe base64), background
+  auto-refresh через WorkManager раз в 12 часов.
+- Latency-ping для каждого конфига с colour-coded badge
+  (<100мс зелёный, <300мс янтарный, >=300мс красный).
+- **QR-сканер** — добавление share-URL камерой через CameraX + ML Kit
+  bundled barcode (работает без Google Play Services).
+- **QR-share + Copy + system Send-sheet** — на каждой карточке сервера.
+  Закрывает цикл «телефон-в-телефон» с QR-сканером.
+- **In-place edit** конфига (rename + URL update) — пенсил-кнопка в hero и
+  compact-row. Сохраняет active reference при переименовании.
 
-**Phase 4 — split-routing (готово):**
-- `core.Storage.loadDefaultSites(context)` — грузит `default_sites.json`
-  из ассетов (синкается build-task'ом из `../kapro_vpn/data/`). 108 RU-
-  доменов (банки, госуслуги, маркетплейсы) ✓
-- HomeScreen передаёт список в `XrayConfigBuilder.directDomains` ✓
-- На Android IP-резолв НЕ нужен (в отличие от десктопа): xray
-  freedom-outbound → app-socket → bypass TUN автоматом через
-  `Builder.addDisallowedApplication(packageName)`. Поэтому
-  split-routing работает "бесплатно" — xray роутит по domain rules,
-  Android выводит app-сокеты из TUN ✓
+**Системная интеграция:**
+- Foreground notification с live-state от XrayBridge и кнопкой
+  «Отключить».
+- Quick Settings tile — добавляется через системный edit-tiles,
+  один тап toggle'ит VPN.
+- Autoconnect on app launch + on device boot (BOOT_COMPLETED receiver).
+- Always-on VPN compatible — поднимается с null-intent path,
+  graceful onRevoke().
+- Live traffic stats на Home — ↓↑ totals за сессию + текущая скорость,
+  pull-семплинг libv2ray `queryStats` раз в секунду.
 
-**Phase 5 — Storage + UI экраны (готово):**
-- `core.AppSettings` — @Serializable data class (dnsOptionKey,
-  activeConfigName, autoconnectOnLaunch) ✓
-- `core.Storage` — saveConfigs / loadConfigs / saveSettings /
-  loadSettings, JSON в filesDir, atomic-ish write через .tmp + rename ✓
-- `core.AppRepository` — singleton-холдер StateFlow для конфигов и
-  настроек. Compose-экраны подписываются через `collectAsState()` ✓
-- 3-таб навигация (`ui.AppNav`) в `Scaffold.bottomBar` без
-  navigation-compose lib — Home / Серверы / Настройки ✓
-- `ui.ConfigsScreen` — LazyColumn со списком, FAB «Добавить»
-  открывает диалог с share-URL TextField, swipe-to-set-active,
-  delete-icon. Empty state с CTA ✓
-- `ui.SettingsScreen` — 4 DnsOption-карточки (RadioButton),
-  Switch для autoconnect, секция «О приложении» с версией
-  Xray-core ✓
-- `ui.HomeScreen` переписан — больше нет TextField'а (он в Configs),
-  показывает active config card с янтарной подсветкой когда подключён,
-  CTA для пустого состояния, ВКЛЮЧИТЬ работает с saved active config ✓
+**Сборка и распространение:**
+- R8 minify + shrink, ABI splits (arm64-v8a / armeabi-v7a / x86_64 / x86 +
+  universal). Каждый ABI-APK ~40-44 МБ — лезет в Telegram (50 МБ лимит).
+- 16 KB ELF page alignment во всех нативных .so — приложение работает
+  на Pixel 8+ и Android 15+ без compatibility-mode.
+- i18n RU/EN — UI переключается по системной локали.
+- 36 юнит-тестов на парсер, конфиг-билдер и subscription import.
 
-**Phase 6 — Subscription import (готово):**
-- `core.Subscription` — порт `subscription.py`. parseBody (plain
-  + base64 + URL-safe base64) + import() через HttpURLConnection,
-  suspend на Dispatchers.IO ✓
-- `ui.SubscriptionDialog` — URL input → fetch с прогресс-спиннером
-  → результат «Найдено N серверов» + preview первых 5 → «Добавить
-  все» ✓
-- `AppRepository.addConfigs(list)` — пакетная замена-merge,
-  существующие имена обновляются, первый импортированный становится
-  активным если активного не было ✓
-- ConfigsScreen TopAppBar — IconButton «Импорт по подписке» + Snackbar
-  «Импортировано N серверов» после успеха ✓
-- 6 unit-тестов на parseBody + resultFromBody (plain, base64,
-  URL-safe base64, comments, broken entries) ✓
-- material-icons-extended dep подключён ради CloudDownload — R8
-  tree-shake'ит неиспользуемое в release ✓
+## Сборка
 
-**Phase 7 — Encryption at rest (готово):**
-- `core.SecretsStore` — AES-256-GCM через Android Keystore. Ключ
-  генерируется на первом запуске, хранится в TEE/hardware на
-  поддерживающих устройствах, alias `kaprovpn_configs_v1`. Magic-
-  prefix `KAPROVPN-AES-1 ` отличает encrypted-blob от legacy
-  plain JSON ✓
-- `Storage.loadConfigs` распознаёт legacy plain → парсит → следующий
-  save автоматически переписывает в encrypted (transparent миграция
-  с pre-Phase-7 установок) ✓
-- `Storage.saveConfigs` шифрует перед записью; atomic-ish .tmp+rename
-  сохранён ✓
-- settings.json оставлен plain — там dnsOptionKey / activeConfigName /
-  autoconnect — не секреты ✓
-- Build + tests зелёные. E2E (проверка зашифрованных байт через
-  adb run-as) — требует ручного добавления конфига в UI, опционально ✓
+### Из Android Studio
 
-**Phase 8 — i18n RU/EN (готово):**
-- `res/values/strings.xml` — RU source of truth, ~50 ключей
-  (nav, screens, dialogs, errors, notification) ✓
-- `res/values-en/strings.xml` — EN-перевод, тот же набор ключей ✓
-- Все Compose-экраны (AppNav, HomeScreen, ConfigsScreen,
-  SettingsScreen, SubscriptionDialog) используют `stringResource()`
-  с form'атными параметрами для счётчиков ✓
-- `KaproVpnService` — `getString(R.string.vpn_notification_*)`
-  для channel + content + action ✓
-- `DnsOption.labelRu/labelEn` — UI выбирает по
-  `LocalConfiguration.current.locales[0].language` ✓
-- Tab labels хранят `@StringRes Int`, не String, чтобы
-  локализоваться корректно ✓
-- Build ✓. EN автоматически активируется когда устройство
-  переключено на English-локаль.
+1. `File → Open → <repo>/android`.
+2. Дождаться Gradle Sync (~1 минута на первом запуске — скачивается
+   libv2ray.aar ~55 МБ из 2dust/AndroidLibXrayLite).
+3. `Run → Run 'app'`.
 
-**Phase 9 — Subscription auto-refresh (готово):**
-- `AppSettings.subscriptionUrl` + `subscriptionAutorefresh` (default
-  on) хранятся в settings.json (plain, не секрет — URL уже знает
-  провайдер) ✓
-- `vpn.SubscriptionRefreshWorker` — `CoroutineWorker`, periodic
-  каждые 12 часов с `NetworkType.CONNECTED` constraint.
-  `Result.retry` на ошибки чтобы не убивать schedule ✓
-- `App.onCreate` зовёт `SubscriptionRefreshWorker.schedule(this)` —
-  KEEP-policy, idempotent ✓
-- SubscriptionDialog сохраняет URL в `AppRepository.setSubscriptionUrl`
-  при успешном импорте → worker подхватывает на следующий tick ✓
-- SettingsScreen — toggle «Автообновление подписки» под
-  Автоподключением ✓
-- Build ✓, тесты ✓
+### Из командной строки
 
-**Phase 10 — Always-on VPN + kill-switch (готово):**
-- `KaproVpnService.onStartCommand` handle null intent (system-initiated
-  start через Always-on VPN) — читает active config из AppRepository
-  + собирает Xray-JSON + поднимает TUN. `START_REDELIVER_INTENT` для
-  этого случая чтобы рестарт сохранял intent ✓
-- `KaproVpnService.onRevoke` — graceful cleanup когда система отзывает
-  permission (user, другой VPN-клиент захватил). Раньше дефолтная
-  реализация просто закрывала FD — xray-core продолжал жить и
-  спамить ошибками ✓
-- `AppRepository.buildActiveConfigJson()` — helper для обоих путей
-  (HomeScreen + Always-on auto-start) ✓
-- SettingsScreen — секция «Always-on VPN (kill-switch)» с hint'ом
-  и кнопкой `Settings.ACTION_VPN_SETTINGS` открывающей системные VPN
-  настройки ✓
-- Strings RU/EN ✓
-- Build ✓
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+cd android                               # из корня репо
+.\gradlew.bat :app:installDebug          # debug-APK на подключённое устройство
+.\gradlew.bat :app:testDebugUnitTest     # юнит-тесты
+.\gradlew.bat :app:assembleRelease       # release ABI-splits + universal
+```
 
-**Phase 11 — Ping per config (готово):**
-- `XrayBridge.measureDelay(configJson, testUrl)` — suspend-обёртка
-  над статическим `Libv2ray.measureOutboundDelay`. Не требует
-  активной сессии — поднимает мини-pipeline под капотом ✓
-- `AppRepository.pings: StateFlow<Map<String, PingState>>`. Состояния:
-  NotMeasured / InProgress / Ok(ms) / Failed ✓
-- `AppRepository.pingConfig(name)` + `pingAll()` — параллельный
-  замер всех серверов через async + awaitAll ✓
-- ConfigsScreen — refresh-кнопка в TopAppBar + ms-бейдж в каждой
-  строке. Цветовая индикация: <100мс зелёный (primary), <300мс
-  янтарный (secondary), ≥300мс красный (error) ✓
-- Strings RU/EN ✓
-- Build ✓
-
-**Phase 12 — Release pipeline (готово):**
-- `app/build.gradle.kts` читает `keystore.properties` из корня
-  `android/` (gitignored). Есть keystore — release подписан им;
-  нет — fallback на debug-key (OK для личного использования, не для
-  Play-апдейтов) ✓
-- R8 включён для release: `isMinifyEnabled=true` +
-  `isShrinkResources=true`. Tree-shake'ит неиспользуемое из
-  material-icons-extended и подобного ✓
-- ABI splits — отдельный APK на каждую архитектуру.
-  Universal-APK тоже выдаётся для прямой раздачи без знания ABI ✓
-- `proguard-rules.pro` обновлён: keep libv2ray/CoreCallbackHandler
-  (JNI-callbacks), Workers (WorkManager reflection), `$$serializer`/
-  Companion (kotlinx-serialization) ✓
-- `keystore.properties.example` — template + инструкция как
-  сгенерировать keystore через `keytool` ✓
-
-Результаты release-сборки:
-- arm64-v8a: 42 МБ (современные телефоны)
-- armeabi-v7a: 40 МБ (старые ARM32)
-- x86_64: 44 МБ
-- x86: 41 МБ
-- universal: 140 МБ (все ABI в одном)
-
-Это ~3.5× меньше debug-сборки. Каждый ABI-APK помещается во вложение
-Telegram (50 МБ лимит для обычных пользователей), что важно для
-распространения вне Play.
-
-## Как собрать release-APK
+### Release-APK с подписанием
 
 ```powershell
 # 1. (один раз) сгенерировать keystore
@@ -235,75 +108,41 @@ cd android
 # → android/app/build/outputs/apk/release/app-{abi}-release.apk
 ```
 
-Без keystore.properties release всё равно соберётся — но подписан
-debug-key'ем. Установится только на чистый телефон, апдейт поверх
-release с другой подписью не пройдёт.
+Без `keystore.properties` release всё равно собирается, но подписан
+debug-key'ем. Установится на чистый телефон, апдейт поверх release с
+другой подписью не пройдёт — то есть для personal use ок, для раздачи
+из Telegram нужен свой keystore.
 
-**Phase 13 — Autoconnect on launch + boot (готово):**
-- Toggle «Автоподключение при запуске» из Phase 5 наконец завязан
-  на действия:
-  * **App launch** — `MainActivity.onCreate` (только если
-    `savedInstanceState == null`, т.е. cold start) зовёт
-    `connectWith()` если toggle on, активный конфиг есть и VPN
-    ещё не подключён ✓
-  * **Device boot** — `vpn.BootReceiver` ловит `BOOT_COMPLETED`,
-    стартует сервис через null-intent path (Phase 10 reuse).
-    Skip если VPN-permission revoked или активного конфига нет ✓
-- `RECEIVE_BOOT_COMPLETED` permission + receiver-блок в манифесте ✓
-- Безопасно сосуществует с Always-on VPN: race решается через
-  `XrayBridge.state` check + идемпотентность foreground-сервиса ✓
+## Эмулятор
 
-## Требования
+Стандартный AVD x86_64 с API 28+ работает. У тебя уже создан
+`Iphone_17_pro_max` — он подходит.
 
-- Android Studio Ladybug (2024.2) или новее
-- JDK 21 (поставляется с Android Studio как `jbr/`)
-- Android SDK Platform 34 + build-tools 34.0.0
-- Минимум для запуска приложения: Android 7.0 (API 24)
+### Изоляция AVD от десктопного KaproVPN
 
-Эмулятор: подойдёт любой x86_64 образ с API 28+. У тебя уже создан AVD
-`Iphone_17_pro_max` — он сработает.
-
-### Изоляция эмулятора от десктоп-KaproVPN
-
-Если на хосте поднят `KaproTun` (десктоп-клиент включён), QEMU/slirp при
+Если на хосте поднят `KaproTun` (десктопный VPN включён), QEMU/slirp при
 старте эмулятора подцепляет его DNS (AdGuard 94.140.14.14) и кеширует
-на всю сессию. Когда десктопный VPN выключают — эмулятор теряет DNS и
-Chrome ловит `DNS_PROBE_FINISHED_NO_INTERNET`, при том что в Android-
-приложении сам VPN-туннель до 46.17.101.82 идёт мимо `kaprotun` через
-обычный WiFi.
+на всю сессию. Когда десктопный VPN выключают — эмулятор теряет DNS
+и Chrome ловит `DNS_PROBE_FINISHED_NO_INTERNET`, при том что
+Android-приложение сам туннель до сервера проводит через WiFi мимо
+`kaprotun`.
 
-Чтобы эмулятор был полностью независим от десктопного VPN, запускай его
-через скрипт-обёртку:
+Запускать эмулятор лучше через скрипт-обёртку:
 
 ```powershell
 pwsh .\android\run-emulator.ps1                    # AVD по умолчанию
 pwsh .\android\run-emulator.ps1 -Avd Pixel_8_API_34
-pwsh .\android\run-emulator.ps1 -NoRoutes          # без admin
+pwsh .\android\run-emulator.ps1 -NoRoutes          # без admin-прав
 ```
 
 Скрипт:
 - останавливает уже запущенный эмулятор (старые `-dns-server` не применятся);
 - запускает с `-dns-server 1.1.1.1,8.8.8.8` (slirp больше не наследует host DNS);
-- (с админ-правами) закрепляет роут на эти IP через WiFi с метрикой 1 — даже
+- (с admin'ом) пиннит роуты на эти IP через WiFi с метрикой 1 — даже
   если десктопный VPN захочет перехватить DNS-пакеты, они уйдут мимо;
 - по выходу из эмулятора убирает добавленные роуты.
 
-## Открыть и собрать
-
-```powershell
-# в Android Studio: File → Open → C:\Users\user\Desktop\russian-vpn\android
-# дождаться Gradle Sync (~1 минута на первом запуске — Android Studio скачает зависимости)
-# Run → Run 'app'
-```
-
-Или из командной строки (когда сгенерирован wrapper):
-
-```powershell
-cd C:\Users\user\Desktop\russian-vpn\android
-.\gradlew.bat installDebug
-```
-
-## Структура
+## Архитектура
 
 ```
 android/
@@ -311,18 +150,68 @@ android/
 ├── build.gradle.kts               плагины (без зависимостей)
 ├── gradle.properties              JVM-флаги Gradle, AndroidX-флаги
 ├── gradle/libs.versions.toml      version catalog — все версии в одном месте
+├── run-emulator.ps1               запуск AVD с изоляцией от десктопного VPN
 └── app/
-    ├── build.gradle.kts           зависимости приложения, copy-task для default_sites.json
+    ├── build.gradle.kts           зависимости + copy-task для default_sites.json
+    │                              + download-task для libv2ray.aar
     └── src/main/
-        ├── AndroidManifest.xml    permissions + Activity + (TODO) VpnService
+        ├── AndroidManifest.xml    permissions + Activity + VpnService + tile
+        ├── jniLibs/<abi>/         libhev-socks5-tunnel.so (из sockstun 7.0)
         ├── kotlin/pro/kaprovpn/android/
-        │   ├── App.kt              Application
-        │   ├── MainActivity.kt     ComponentActivity + Compose root
-        │   ├── ui/                 экраны Compose, тема (амбер на тёмном)
-        │   ├── core/               TODO: парсеры, конфиг-билдер (порт kapro_vpn/core)
-        │   └── vpn/                TODO: VpnService, libXray bridge
-        └── res/                    drawable, strings, themes, mipmap (адаптивная иконка)
+        │   ├── App.kt              Application — init XrayBridge + Repository
+        │   ├── MainActivity.kt     Compose root + VPN-permission flow
+        │   ├── core/               чистый Kotlin, безопасный для юнит-тестов
+        │   │   ├── ShareUrlParser  vless/vmess/trojan/ss/hy2 → ProxyConfig
+        │   │   ├── XrayConfigBuilder ProxyConfig → JSON для libv2ray
+        │   │   ├── AppRepository   StateFlow-холдер конфигов + settings + ping
+        │   │   ├── Storage         JSON load/save, encryption через Keystore
+        │   │   ├── Subscription    fetch + parse subscription URL
+        │   │   ├── DnsOption       4 опции с DoH / bypass-IPs
+        │   │   ├── QrGenerator     ZXing — share-URL → QR Bitmap
+        │   │   └── SecretsStore    AES-256-GCM через Android Keystore
+        │   ├── ui/                 Compose-экраны
+        │   │   ├── AppNav          корневой Scaffold + NavigationBar + sub-screens
+        │   │   ├── HomeScreen      большая CONNECT-кнопка + live traffic stats
+        │   │   ├── ConfigsScreen   список серверов, FAB-меню (URL/QR/sub)
+        │   │   ├── ScanQrScreen    CameraX preview + ML Kit barcode scanner
+        │   │   ├── ShareConfigDialog QR + Copy + Send-sheet
+        │   │   ├── SubscriptionDialog
+        │   │   ├── SettingsScreen  DNS / autoconnect / per-app / about
+        │   │   ├── ExcludedAppsScreen
+        │   │   ├── LogsScreen      live xray-core output
+        │   │   └── theme/          tonal palette (амбер на тёмном)
+        │   └── vpn/                Android-специфичный сетевой слой
+        │       ├── KaproVpnService extends VpnService — TUN setup + foreground
+        │       ├── XrayBridge      singleton-обёртка над libv2ray CoreController
+        │       ├── HevTunnel       tun2socks-мост через libhev-socks5-tunnel.so
+        │       ├── VpnTileService  Quick Settings tile
+        │       ├── BootReceiver    autoconnect на boot
+        │       └── SubscriptionRefreshWorker WorkManager — refresh 12h
+        └── res/
+            ├── values{,-en}/strings.xml   RU source-of-truth + EN-перевод
+            ├── drawable*/                  hero, tile-states, notification
+            ├── mipmap*/                    адаптивная иконка (launcher)
+            └── ... colors/themes
 ```
+
+### Поток данных при ВКЛЮЧИТЬ
+
+```
+HomeScreen.onConnect
+  └─ XrayConfigBuilder.buildConfigJson(activeConfig, directDomains, dns)
+  └─ MainActivity.requestVpnPermission()
+       └─ KaproVpnService.onStartCommand
+            ├─ Builder.addAddress/addRoute/setMtu → establish() → tunFd
+            ├─ XrayBridge.start(json, tunFd=0)       ← xray-core слушает SOCKS5 на 127.0.0.1:2081
+            └─ HevTunnel.start(context, tunFd=fd)    ← читает TUN, форвардит в SOCKS5
+                                                       вверх ↑ оба бэгграунд-сервиса
+```
+
+Ключевая тонкость: `libv2ray.startLoop(config, tunFd)` НЕ читает пакеты
+из TUN — этим занимается `libhev-socks5-tunnel.so` (от
+[heiher/sockstun](https://github.com/heiher/sockstun)). Без него xray
+работает в proxy-режиме, но системный трафик до него не доходит. Это
+была баг-ловушка первой версии («Connected, но веб не открывается»).
 
 ## Откуда берётся `default_sites.json`
 
@@ -330,15 +219,28 @@ android/
 клиентов. Gradle-task `copyDefaultSitesJson` в `app/build.gradle.kts`
 синкает файл в ассеты при каждой сборке. Не правь копию — правь оригинал.
 
+## Откуда берётся libv2ray.aar
+
+С GitHub Releases [2dust/AndroidLibXrayLite v26.5.19](https://github.com/2dust/AndroidLibXrayLite/releases).
+Слишком тяжёлый для git (~55 МБ) — gitignore'нится. Task
+`downloadLibV2ray` качает на первый build, дальше UP-TO-DATE.
+
+## Откуда берётся libhev-socks5-tunnel.so
+
+Из release-APK [heiher/sockstun 7.0](https://github.com/heiher/sockstun/releases).
+Чекинится в `app/src/main/jniLibs/<abi>/` (~300 КБ × 4 ABI). JNI symbols
+ожидают package `hev.sockstun` — нельзя перемещать `TProxyService.kt`
+без перекомпиляции .so.
+
 ## Что НЕ переносится с десктопа
 
 - Windows-специфика: `system_proxy.py`, `network_routes.py`,
-  `killswitch.py`, `autostart.py`, `admin.py`
+  `killswitch.py`, `autostart.py`, `admin.py`.
 - Сабпроцессный запуск Xray (`xray_process.py`) — на Android Xray
-  линкуется как `.so` через libXray-AAR, не отдельный процесс
-- tun2socks как отдельный exe — на Android используется `hev-socks5-tunnel`
-  через JNI (или встроенный в VpnService TUN-handler в самом libXray)
-- PySide6 GUI — переписан на Compose
+  линкуется как `.so` через libv2ray.aar.
+- tun2socks как отдельный exe — на Android используется
+  `hev-socks5-tunnel` через JNI.
+- PySide6 GUI — переписан на Compose.
 
 ## Версии (см. `gradle/libs.versions.toml`)
 
@@ -347,5 +249,35 @@ android/
 | AGP | 8.7.3 | стабильный с Gradle 8.10+ |
 | Kotlin | 2.0.21 | встроенный Compose-compiler plugin |
 | Compose BOM | 2024.10.01 | согласованный набор Compose-артефактов |
+| CameraX | 1.4.0 | минимум для 16 KB page alignment в `libimage_processing_util_jni.so` |
+| ML Kit barcode | 17.3.0 bundled | модель в APK, без Google Play Services |
+| ZXing | 3.5.3 (core) | QR-генератор для share-диалога |
+| hev-socks5-tunnel | sockstun 7.0 | tun2socks bridge |
+| libv2ray | v26.5.19 | Xray-core JNI-биндинги |
 | minSdk | 24 (Android 7.0) | покрытие ~98%, VpnService стабилен |
-| targetSdk | 34 (Android 14) | актуальный на момент скаффолда |
+| targetSdk | 34 (Android 14) | актуальный без принудительного 16 KB-режима |
+| compileSdk | 34 | CameraX 1.4 ещё работает с этим, 1.5+ требует 35 |
+
+## Troubleshooting
+
+**«Connected, но веб не открывается»** — обычно `HevTunnel` не стартовал
+(тihо упал на parse YAML). Смотри logcat по тегу `HevTunnel` — там
+видно содержимое `hev-tunnel.log` после tee. Частая причина —
+несоответствие `tunnel.ipv4` / MTU в YAML и в `VpnService.Builder`.
+
+**«Android App Compatibility — ELF alignment»** на Android 15+ — должна
+быть пофикшена bumpм CameraX до 1.4.0. Если всплывает с другими `.so` —
+запустить аудит: `pip install --user pyelftools`, распаковать собранный
+APK (`unzip -j app-x86_64-debug.apk 'lib/x86_64/*.so' -d out/`), и в
+Python пройти `ELFFile(path).iter_segments()` — каждый `PT_LOAD` сегмент
+должен иметь `p_align >= 0x4000` (16 KB). Полный one-liner — в коммите
+`9da521e`.
+
+**Подключение к серверу есть, traffic stats на Home показывают
+нулевые скорости** — проверь что в xray-config есть `stats: {}` и
+`policy.system.statsOutboundUplink/Downlink: true`. Без них
+`queryStats("proxy", "uplink")` всегда возвращает 0.
+
+**Эмулятор `DNS_PROBE_FINISHED_NO_INTERNET` после выключения
+десктопного KaproVPN** — запустить через `run-emulator.ps1` (см.
+секцию «Эмулятор» выше).
