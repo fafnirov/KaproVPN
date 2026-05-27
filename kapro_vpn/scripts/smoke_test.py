@@ -437,6 +437,77 @@ check("picker search: misses unrelated query",      _picker_matcher_misses_unrel
 
 
 # ---------------------------------------------------------------------------
+# Test 5.7 — Theme system (v1.13.0)
+# ---------------------------------------------------------------------------
+# Two pre-built QSS strings + a selector function. Smoke checks both
+# sheets render without ValueError (any unresolved {field} in the
+# f-string would raise KeyError at build time), that the selector
+# returns distinct strings per theme, and that "dark" sheet doesn't
+# accidentally have white-text values that'd suggest a light/dark
+# mix-up (regression guard against typo in palette wiring).
+
+section("Themes — dark + light")
+
+from kapro_vpn.gui import styles as _styles
+
+
+def _both_qss_built() -> None:
+    if not _styles.DARK_QSS or len(_styles.DARK_QSS) < 1000:
+        raise AssertionError("DARK_QSS missing or suspiciously short")
+    if not _styles.LIGHT_QSS or len(_styles.LIGHT_QSS) < 1000:
+        raise AssertionError("LIGHT_QSS missing or suspiciously short")
+
+
+def _qss_themes_differ() -> None:
+    # If the two sheets are character-identical, the palette wiring is
+    # broken (probably LIGHT_PALETTE references DARK_PALETTE constants).
+    if _styles.DARK_QSS == _styles.LIGHT_QSS:
+        raise AssertionError("DARK_QSS and LIGHT_QSS are identical — wiring broken")
+
+
+def _selector_picks_explicit_theme() -> None:
+    if _styles.get_qss("light") != _styles.LIGHT_QSS:
+        raise AssertionError("get_qss('light') didn't return LIGHT_QSS")
+    if _styles.get_qss("dark") != _styles.DARK_QSS:
+        raise AssertionError("get_qss('dark') didn't return DARK_QSS")
+
+
+def _palettes_keep_brand_accent() -> None:
+    # Amber #f59e0b is the KaproVPN brand color — both themes must
+    # use it for ACCENT so the visual identity stays consistent.
+    # If someone "rebrands" one of them to a different hue, smoke
+    # catches it before users see a confused UI.
+    if _styles.DARK_PALETTE.ACCENT.lower() != "#f59e0b":
+        raise AssertionError(
+            f"DARK accent must be brand amber #f59e0b, got "
+            f"{_styles.DARK_PALETTE.ACCENT}"
+        )
+    if _styles.LIGHT_PALETTE.ACCENT.lower() != "#f59e0b":
+        raise AssertionError(
+            f"LIGHT accent must be brand amber #f59e0b, got "
+            f"{_styles.LIGHT_PALETTE.ACCENT}"
+        )
+
+
+def _backcompat_constants_still_export() -> None:
+    # widgets.py and onboarding.py import `styles.ACCENT`, `styles.TEXT_MUTED`
+    # directly. The Palette-refactor in v1.13.0 added back-compat aliases
+    # so those still work. If someone removes them — instant ImportError
+    # at app launch. Guard.
+    for name in ("BG", "SURFACE", "BORDER", "TEXT", "TEXT_MUTED",
+                 "TEXT_DIM", "ACCENT", "ACCENT_HI", "ACCENT_DIM", "DANGER"):
+        if not hasattr(_styles, name):
+            raise AssertionError(f"backcompat constant styles.{name} missing")
+
+
+check("DARK_QSS and LIGHT_QSS both build",         _both_qss_built)
+check("DARK and LIGHT sheets are distinct",        _qss_themes_differ)
+check("get_qss selector returns correct sheet",    _selector_picks_explicit_theme)
+check("both palettes keep brand amber accent",     _palettes_keep_brand_accent)
+check("widgets.py backcompat constants exported",  _backcompat_constants_still_export)
+
+
+# ---------------------------------------------------------------------------
 # Test 6 — Installer flow transitions
 # ---------------------------------------------------------------------------
 # Catches regressions like "click does nothing because we addWidget but

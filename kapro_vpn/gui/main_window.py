@@ -519,6 +519,45 @@ class SettingsPage(QWidget):
         lang_hint.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(lang_hint)
 
+        # --- Theme toggle (v1.13.0) ---
+        # Same pattern as language: QComboBox with 3 options, takes effect
+        # at next restart (Qt doesn't cleanly re-style already-constructed
+        # widgets without each widget participating, and our code uses
+        # both global stylesheet AND a few setStyleSheet calls in widgets
+        # — restart is simpler than chasing every label).
+        theme_row = QHBoxLayout()
+        theme_row.setContentsMargins(0, 6, 0, 0)
+        theme_label_text = "Тема" if _i18n.current_locale() == "ru" else "Theme"
+        theme_label = QLabel(theme_label_text)
+        theme_row.addWidget(theme_label)
+        theme_row.addStretch(1)
+        self.theme_combo = QComboBox()
+        # Same order convention as language — Auto first (sensible default),
+        # then alphabetical.
+        auto_label = "Авто (по системе)" if _i18n.current_locale() == "ru" else "Auto (system)"
+        dark_label = "Тёмная" if _i18n.current_locale() == "ru" else "Dark"
+        light_label = "Светлая" if _i18n.current_locale() == "ru" else "Light"
+        self.theme_combo.addItem(auto_label, "auto")
+        self.theme_combo.addItem(dark_label, "dark")
+        self.theme_combo.addItem(light_label, "light")
+        current_theme = manager.settings.get("theme", "auto")
+        for i in range(self.theme_combo.count()):
+            if self.theme_combo.itemData(i) == current_theme:
+                self.theme_combo.setCurrentIndex(i)
+                break
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        theme_row.addWidget(self.theme_combo)
+        outer.addLayout(theme_row)
+        theme_hint = QLabel(
+            "Изменение применится после перезапуска KaproVPN."
+            if _i18n.current_locale() == "ru"
+            else "Changes take effect after KaproVPN restarts."
+        )
+        theme_hint.setObjectName("dim")
+        theme_hint.setWordWrap(True)
+        theme_hint.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(theme_hint)
+
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -658,6 +697,14 @@ class SettingsPage(QWidget):
         if self._ublock_helper is not None:
             self._ublock_helper.setVisible(key == "adguard")
         self.settings_changed.emit()
+
+    def _on_theme_changed(self, _index: int) -> None:
+        """Persist theme choice. Applied at next launch via main.py's
+        get_qss(settings.theme) — see _on_language_changed for why
+        we don't re-style live (chasing every widget's local setStyleSheet
+        is fragile; restart is one extra click).
+        """
+        self._manager.update_settings(theme=self.theme_combo.currentData())
 
     def _on_language_changed(self, _index: int) -> None:
         """Persist language choice. Takes effect on next launch — we don't

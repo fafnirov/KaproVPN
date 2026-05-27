@@ -13,7 +13,7 @@ from .core import autostart, i18n, ipv6_block, killswitch, storage, system_proxy
 from .gui import icons
 from .gui.main_window import MainWindow
 from .gui.singleton import SingleInstanceGuard
-from .gui.styles import DARK_QSS
+from .gui.styles import DARK_QSS, get_qss  # noqa: F401  (DARK_QSS kept for back-compat)
 
 # Hidden-window flags for subprocess on Windows (no console flash for
 # the orphan-killer taskkill calls).
@@ -123,7 +123,11 @@ def main() -> int:
     i18n.init_from_settings(storage.load_settings().get("language"))
     app.setApplicationName("KaproVPN")
     app.setOrganizationName("KaproVPN")
-    app.setStyleSheet(DARK_QSS)
+    # v1.13.0: theme is now user-selectable (Settings → Тема: Auto/Dark/Light).
+    # Auto follows OS via QStyleHints.colorScheme() at this point in startup —
+    # QApplication is constructed above, so the style hints are queryable.
+    _settings_for_theme = storage.load_settings()
+    app.setStyleSheet(get_qss(str(_settings_for_theme.get("theme", "auto"))))
     app.setWindowIcon(icons.app_icon())
     # Don't exit when the user clicks X — we hide to tray instead.
     # Real exit goes through the tray-menu "Выход" item, which calls

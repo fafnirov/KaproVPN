@@ -157,13 +157,9 @@ class OnboardingPage(QWidget):
         """A flat card with emoji + title + dim subtitle + action button."""
         card = QFrame()
         card.setObjectName("onboardCard")
-        card.setStyleSheet(
-            "QFrame#onboardCard {"
-            "  background: #18181b;"
-            "  border: 1px solid #27272a;"
-            "  border-radius: 10px;"
-            "}"
-        )
+        # v1.13.0: removed the hardcoded inline stylesheet (dark colours
+        # baked into the widget) — now styled by the global QSS via
+        # objectName, so light theme picks the right colors automatically.
 
         body = QVBoxLayout(card)
         body.setContentsMargins(16, 14, 16, 14)
@@ -181,7 +177,10 @@ class OnboardingPage(QWidget):
         head_text = QVBoxLayout()
         head_text.setSpacing(2)
         t = QLabel(title)
-        t.setStyleSheet("color: #fafafa; font-weight: 600; font-size: 11pt;")
+        # v1.13.0: was hardcoded color #fafafa (only readable on dark).
+        # Now uses objectName so the global QSS rule picks the active
+        # palette's TEXT color (dark on light, white on dark).
+        t.setObjectName("onboardTitle")
         t.setWordWrap(True)
         head_text.addWidget(t)
         s = QLabel(subtitle)
