@@ -24,7 +24,7 @@ show nothing than make the UI feel sluggish.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -104,6 +104,7 @@ def fetch_public_ip(
     socks_proxy: Optional[str] = None,
     timeout: float = 5.0,
     locale: str = "ru",
+    debug: Optional[Callable[[str], None]] = None,
 ) -> Optional[PublicIp]:
     """Return the public IP + country as seen by ipinfo.io, or None on
     any failure (timeout, network error, malformed response, etc.).
@@ -113,21 +114,40 @@ def fetch_public_ip(
     instead of the local one. In TUN mode pass None — the system route
     table already sends everything through the tunnel.
 
-    Failure is silent: the UI showing "Ваш IP: ..." is a nice-to-have,
-    not a hard requirement. We never raise here; the worst case is the
-    label stays empty and the user falls back to their old habit of
-    checking ipleak.net manually.
+    debug: optional callback(str) — when provided, gets one line per
+    significant step (start / endpoint chosen / response status / error
+    type). Off by default so we don't spam the Logs page on every
+    connect. v1.10.1 wires this to the in-app log so silent probe
+    failures stop being invisible.
+
+    Failure is silent (None return): the UI showing "Ваш IP: ..." is a
+    nice-to-have, not a hard requirement. We never raise here; the worst
+    case is the label stays empty and the user falls back to their old
+    habit of checking ipleak.net manually.
     """
+    def _say(msg: str) -> None:
+        if debug:
+            try:
+                debug(msg)
+            except Exception:
+                pass  # debug callback misbehaving must not break the probe
+
     proxies: Optional[dict[str, str]] = None
     if socks_proxy:
-        # requests' socks support comes from PySocks (already a transitive
-        # dep of xray-installer's mirror downloads). socks5h:// means
-        # resolve the hostname on the proxy side too — ipinfo.io shouldn't
-        # leak via local DNS while we're testing what's behind the tunnel.
+        # requests' socks support comes from PySocks. In a PyInstaller
+        # bundle PySocks isn't auto-detected (urllib3 imports it
+        # dynamically only when a socks:// URL is actually used) — the
+        # spec file's hiddenimports=['socks'] makes sure it ships.
+        # socks5h:// means resolve the hostname on the proxy side too —
+        # ipinfo.io shouldn't leak via local DNS while we're testing
+        # what's behind the tunnel.
         proxies = {
             "http":  f"socks5h://{socks_proxy}",
             "https": f"socks5h://{socks_proxy}",
         }
+        _say(f"[ip-probe] starting via SOCKS5 {socks_proxy} (HTTP mode)")
+    else:
+        _say("[ip-probe] starting direct (TUN mode — kernel routes through tunnel)")
 
     try:
         r = requests.get(
@@ -136,17 +156,37 @@ def fetch_public_ip(
             proxies=proxies,
             headers={"User-Agent": "KaproVPN/ip-probe"},
         )
-        r.raise_for_status()
+    except requests.exceptions.Timeout:
+        _say(f"[ip-probe] timeout after {timeout}s — VPN server slow or ipinfo.io blocked")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        # PySocks missing on bundled .exe surfaces here as
+        # InvalidSchema or ConnectionError with "Missing dependencies
+        # for SOCKS support" in the message — easy to spot in logs.
+        _say(f"[ip-probe] connection failed: {e}")
+        return None
+    except Exception as e:
+        _say(f"[ip-probe] unexpected error: {type(e).__name__}: {e}")
+        return None
+
+    if r.status_code != 200:
+        _say(f"[ip-probe] HTTP {r.status_code} from ipinfo.io")
+        return None
+
+    try:
         data = r.json()
-    except Exception:
+    except ValueError:
+        _say("[ip-probe] ipinfo.io returned non-JSON")
         return None
 
     ip = str(data.get("ip") or "").strip()
     if not ip:
+        _say("[ip-probe] ipinfo.io response had no 'ip' field")
         return None
 
     code = str(data.get("country") or "").strip().upper()
     city = str(data.get("city") or "").strip() or None
     name = _country_display(code, fallback=code, locale=locale)
+    _say(f"[ip-probe] OK: {ip} {code or '??'} {city or ''}".rstrip())
 
     return PublicIp(ip=ip, country_code=code, country_name=name, city=city)

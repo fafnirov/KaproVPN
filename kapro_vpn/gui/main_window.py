@@ -743,11 +743,15 @@ class _IpProbeWorker(QThread):
     a 5-second timeout doesn't freeze the UI.
 
     On success emits resolved(ip, country_name, city). On any failure —
-    silent: emits empty strings, the UI hides the label. We never modal-
-    error on this; it's a nice-to-have, not critical path.
+    silent on the UI (emits empty strings, the label hides) but verbose
+    on the diag signal so the Logs page shows what went wrong. v1.10.0
+    was completely silent on failure which made the "I see no IP" user
+    report impossible to debug remotely; v1.10.1 wires the diag signal
+    to logs_page.append.
     """
 
     resolved = Signal(str, str, str)  # ip, country_name, city
+    diag = Signal(str)                 # one line per significant step
 
     def __init__(self, socks_proxy: Optional[str], locale: str, parent=None):
         super().__init__(parent)
@@ -760,8 +764,14 @@ class _IpProbeWorker(QThread):
             info = ip_probe.fetch_public_ip(
                 socks_proxy=self._socks_proxy,
                 locale=self._locale,
+                debug=self.diag.emit,
             )
-        except Exception:
+        except Exception as e:
+            # Defence in depth — ip_probe already catches everything,
+            # but if it ever surfaces something we still want a log
+            # line and an empty UI rather than an unhandled thread
+            # exception that kills Qt's event loop.
+            self.diag.emit(f"[ip-probe] worker exception: {type(e).__name__}: {e}")
             info = None
         if info is None:
             self.resolved.emit("", "", "")
@@ -1257,6 +1267,9 @@ class MainWindow(QMainWindow):
         from ..core.i18n import current_locale
         self._ip_probe = _IpProbeWorker(socks_proxy, current_locale(), parent=self)
         self._ip_probe.resolved.connect(self._on_ip_probe_resolved)
+        # Pipe probe diagnostics into the Logs page so a silent failure
+        # (no IP shown, no obvious reason) becomes a one-glance debug.
+        self._ip_probe.diag.connect(self.logs_page.append)
         self._ip_probe.start()
 
     def _on_ip_probe_resolved(self, ip: str, country_name: str, city: str) -> None:

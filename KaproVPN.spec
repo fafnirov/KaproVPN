@@ -47,7 +47,16 @@ a = Analysis(
         # keeps working both in dev and in the frozen bundle.
         ('kapro_vpn/data', 'kapro_vpn/data'),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        # PySocks (`socks` module) is imported dynamically by urllib3 only
+        # when a SOCKS5 proxy URL is actually used at runtime. PyInstaller's
+        # static analysis misses it, and the public-IP probe in HTTP-proxy
+        # mode (which routes through socks5h://127.0.0.1:2081) would crash
+        # with "Missing dependencies for SOCKS support" — silently, because
+        # the probe wraps everything in try/except. Result: empty IP label.
+        # Forcing the import here makes PyInstaller bundle PySocks.
+        'socks',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
