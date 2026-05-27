@@ -185,13 +185,19 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') && matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
-          # Take the top-most "## " section from CHANGELOG.md — that's
-          # the "what's new in THIS release" block we maintain manually
-          # before every tag. Stop at the next "## " or "---" divider.
+          # CHANGELOG.md has two `# ` sections — `# Android` (entries from
+          # the parallel Android codebase) and `# Desktop (...)` (entries
+          # from this workflow's builds). Take the top-most `## ` section
+          # INSIDE the Desktop block — otherwise our v1.10.x desktop tag
+          # would publish with the Android v0.1.0 description, which is
+          # exactly what bit us in v1.10.0 → v1.10.2.
           awk '
-            /^## / { if (found) exit; found=1; next }
-            /^---$/ { if (found) exit }
-            found { print }
+            /^# Desktop/    { in_desktop=1; next }
+            /^# /           { if (in_desktop) exit }
+            !in_desktop     { next }
+            /^## /          { if (found) exit; found=1; next }
+            /^---$/         { if (found) exit }
+            found           { print }
           ' CHANGELOG.md > /tmp/release-body-top.md
 
           # Append the static "how to download" table after the

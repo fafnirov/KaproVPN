@@ -23,10 +23,45 @@ show nothing than make the UI feel sluggish.
 """
 from __future__ import annotations
 
+import socket
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 import requests
+
+
+@contextmanager
+def _force_ipv4():
+    """Make socket.getaddrinfo IPv4-only for the duration of the block.
+
+    Why: KaproVPN's TUN mode only tunnels IPv4. On an IPv6-enabled host
+    (typical Russian residential ISP — Beeline, MTS — gives clients
+    public v6), Python's socket prefers AAAA records when both A and
+    AAAA exist. The probe to ipify/ipinfo/ifconfig then resolves via
+    AAAA → goes out over IPv6 → bypasses the TUN entirely → returns
+    the user's REAL public IPv6 from their ISP, not the VPN server's
+    IPv4. v1.10.2 user reported exactly this — UI showed
+    `2a00:1370:...` (real Beeline v6) with country "Россия · Moscow".
+
+    Forcing AF_INET in getaddrinfo means only A records are returned,
+    only IPv4 connections are attempted. The probe then correctly
+    sees the VPN server's egress IPv4.
+
+    Monkey-patching socket.getaddrinfo is normally a red flag, but
+    the probe runs in a single worker thread for ~5 seconds with no
+    concurrent socket calls — restoration in `finally` is guaranteed.
+    """
+    original = socket.getaddrinfo
+
+    def _v4_only(host, port, family=0, *args, **kwargs):
+        return original(host, port, socket.AF_INET, *args, **kwargs)
+
+    socket.getaddrinfo = _v4_only
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original
 
 
 # Map ISO 3166-1 alpha-2 country codes → Russian display names for the
@@ -204,56 +239,77 @@ def fetch_public_ip(
     # endpoint doesn't eat the whole probe window.
     per_endpoint_timeout = max(2.0, timeout / len(_PROBE_ENDPOINTS))
 
+    return _probe_with_fallback(
+        proxies, per_endpoint_timeout, locale, _say,
+    )
+
+
+def _probe_with_fallback(
+    proxies: Optional[dict],
+    per_endpoint_timeout: float,
+    locale: str,
+    _say: Callable[[str], None],
+) -> Optional[PublicIp]:
+    """The actual probe loop, factored out so the IPv4-force context
+    manager wraps it cleanly without nested indentation.
+    """
     last_error = "no endpoints tried"
-    for url, parser in _PROBE_ENDPOINTS:
-        host = url.split("//", 1)[-1].split("/", 1)[0]
-        try:
-            r = requests.get(
-                url,
-                timeout=per_endpoint_timeout,
-                proxies=proxies,
-                headers={"User-Agent": "KaproVPN/ip-probe"},
-            )
-        except requests.exceptions.Timeout:
-            last_error = f"{host}: timeout after {per_endpoint_timeout:.1f}s"
-            _say(f"[ip-probe] {host}: timeout, trying next endpoint")
-            continue
-        except requests.exceptions.ConnectionError as e:
-            # AdGuard DNS NXDOMAIN'ing the endpoint shows up here as
-            # NameResolutionError → ConnectionError. PySocks-missing
-            # on bundled .exe also lands here.
-            last_error = f"{host}: connection failed: {e}"
-            _say(f"[ip-probe] {host}: connection failed (likely blocked/no-DNS), trying next")
-            continue
-        except Exception as e:
-            last_error = f"{host}: {type(e).__name__}: {e}"
-            _say(f"[ip-probe] {host}: {type(e).__name__}, trying next")
-            continue
 
-        if r.status_code != 200:
-            last_error = f"{host}: HTTP {r.status_code}"
-            _say(f"[ip-probe] {host}: HTTP {r.status_code}, trying next")
-            continue
+    # Force IPv4 for the entire probe — see _force_ipv4 docstring.
+    # Without this, on IPv6-enabled hosts the probe leaks the user's
+    # real IPv6 (TUN tunnels IPv4 only). v1.10.2 user saw their real
+    # Beeline-Moscow v6 instead of the VPN's v4 — that's the bug
+    # this context manager fixes.
+    with _force_ipv4():
+        for url, parser in _PROBE_ENDPOINTS:
+            host = url.split("//", 1)[-1].split("/", 1)[0]
+            try:
+                r = requests.get(
+                    url,
+                    timeout=per_endpoint_timeout,
+                    proxies=proxies,
+                    headers={"User-Agent": "KaproVPN/ip-probe"},
+                )
+            except requests.exceptions.Timeout:
+                last_error = f"{host}: timeout after {per_endpoint_timeout:.1f}s"
+                _say(f"[ip-probe] {host}: timeout, trying next endpoint")
+                continue
+            except requests.exceptions.ConnectionError as e:
+                # AdGuard DNS NXDOMAIN'ing the endpoint shows up here as
+                # NameResolutionError → ConnectionError. PySocks-missing
+                # on bundled .exe also lands here.
+                last_error = f"{host}: connection failed: {e}"
+                _say(f"[ip-probe] {host}: connection failed (likely blocked/no-DNS), trying next")
+                continue
+            except Exception as e:
+                last_error = f"{host}: {type(e).__name__}: {e}"
+                _say(f"[ip-probe] {host}: {type(e).__name__}, trying next")
+                continue
 
-        try:
-            data = r.json()
-        except ValueError:
-            last_error = f"{host}: non-JSON response"
-            _say(f"[ip-probe] {host}: non-JSON response, trying next")
-            continue
+            if r.status_code != 200:
+                last_error = f"{host}: HTTP {r.status_code}"
+                _say(f"[ip-probe] {host}: HTTP {r.status_code}, trying next")
+                continue
 
-        try:
-            ip, code, city = parser(data)
-        except Exception as e:
-            last_error = f"{host}: parser failed: {e}"
-            _say(f"[ip-probe] {host}: parser failed: {e}, trying next")
-            continue
+            try:
+                data = r.json()
+            except ValueError:
+                last_error = f"{host}: non-JSON response"
+                _say(f"[ip-probe] {host}: non-JSON response, trying next")
+                continue
 
-        # Success. country_code may be empty (ipify is IP-only) — that's
-        # fine, the UI just shows the IP without country suffix.
-        name = _country_display(code, fallback=code, locale=locale)
-        _say(f"[ip-probe] OK via {host}: {ip} {code or '(no country)'} {city or ''}".rstrip())
-        return PublicIp(ip=ip, country_code=code, country_name=name, city=city)
+            try:
+                ip, code, city = parser(data)
+            except Exception as e:
+                last_error = f"{host}: parser failed: {e}"
+                _say(f"[ip-probe] {host}: parser failed: {e}, trying next")
+                continue
+
+            # Success. country_code may be empty (ipify is IP-only) — that's
+            # fine, the UI just shows the IP without country suffix.
+            name = _country_display(code, fallback=code, locale=locale)
+            _say(f"[ip-probe] OK via {host}: {ip} {code or '(no country)'} {city or ''}".rstrip())
+            return PublicIp(ip=ip, country_code=code, country_name=name, city=city)
 
     _say(f"[ip-probe] all endpoints failed. Last error: {last_error}")
     return None

@@ -315,6 +315,25 @@ check("RU country table covers common VPN locales",
       _probe_locale_table_has_common_countries)
 
 
+def _probe_restores_getaddrinfo() -> None:
+    # v1.10.3: probe monkey-patches socket.getaddrinfo for IPv4-only
+    # resolution during the call. If the `finally` doesn't restore the
+    # original, every subsequent socket.getaddrinfo in the whole app
+    # becomes IPv4-only forever — silent breakage of v6-needing code
+    # paths. Regression guard.
+    import socket as _socket
+    original = _socket.getaddrinfo
+    _ip_probe.fetch_public_ip(socks_proxy="127.0.0.1:1", timeout=1.0)
+    if _socket.getaddrinfo is not original:
+        raise AssertionError(
+            "socket.getaddrinfo was not restored after fetch_public_ip"
+        )
+
+
+check("probe restores socket.getaddrinfo after running",
+      _probe_restores_getaddrinfo)
+
+
 # ---------------------------------------------------------------------------
 # Test 6 — Installer flow transitions
 # ---------------------------------------------------------------------------
