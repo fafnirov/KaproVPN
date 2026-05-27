@@ -381,6 +381,62 @@ check("ipv6_block targets 2000::/3 only (LAN-preserving)",
 
 
 # ---------------------------------------------------------------------------
+# Test 5.6 — Configs-picker search filter (v1.12.0)
+# ---------------------------------------------------------------------------
+# The matcher is a pure static method on the dialog class — no Qt needed
+# to test it. Confirms the match dimensions: name, server IP, port,
+# protocol. Regression guards against someone narrowing the haystack
+# back to just `cfg.name` (which would break "search by IP block" and
+# "search by protocol" — the two cases that justify the feature for
+# users with 20+ servers from a subscription).
+
+section("Configs-picker search matcher")
+
+from kapro_vpn.gui.configs_picker import ConfigsPickerDialog as _Picker
+
+# Synthetic config — no real credentials. Mirrors what a typical
+# subscription entry looks like.
+_test_cfg = ProxyConfig(
+    name="🇫🇮 Финляндия WI-FI",
+    protocol="vless",
+    raw_url="vless://aaaa@1.2.3.4:443?#test",
+    outbound={"server": "1.2.3.4", "server_port": 443},
+)
+
+
+def _picker_matcher_finds_by_name() -> None:
+    if not _Picker._matches(_test_cfg, "финляндия"):
+        raise AssertionError("matcher must find 'финляндия' in cfg.name")
+
+
+def _picker_matcher_finds_by_ip_prefix() -> None:
+    if not _Picker._matches(_test_cfg, "1.2.3"):
+        raise AssertionError("matcher must find '1.2.3' in cfg.outbound.server")
+
+
+def _picker_matcher_finds_by_port() -> None:
+    if not _Picker._matches(_test_cfg, "443"):
+        raise AssertionError("matcher must find '443' in cfg.outbound.server_port")
+
+
+def _picker_matcher_finds_by_protocol() -> None:
+    if not _Picker._matches(_test_cfg, "vless"):
+        raise AssertionError("matcher must find 'vless' in cfg.protocol")
+
+
+def _picker_matcher_misses_unrelated() -> None:
+    if _Picker._matches(_test_cfg, "trojan"):
+        raise AssertionError("matcher false-positive on unrelated 'trojan'")
+
+
+check("picker search: by name (RU substring)",      _picker_matcher_finds_by_name)
+check("picker search: by IP block prefix",          _picker_matcher_finds_by_ip_prefix)
+check("picker search: by port",                     _picker_matcher_finds_by_port)
+check("picker search: by protocol",                 _picker_matcher_finds_by_protocol)
+check("picker search: misses unrelated query",      _picker_matcher_misses_unrelated)
+
+
+# ---------------------------------------------------------------------------
 # Test 6 — Installer flow transitions
 # ---------------------------------------------------------------------------
 # Catches regressions like "click does nothing because we addWidget but

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -101,6 +102,11 @@ class ConfigsPickerDialog(QDialog):
         title = QLabel("Конфиги")
         title.setObjectName("h2")
         header_row.addWidget(title)
+        # Count label updates as the search filters in — "12 из 47"
+        # is way clearer feedback than the list silently shrinking.
+        self.count_label = QLabel("")
+        self.count_label.setObjectName("dim")
+        header_row.addWidget(self.count_label)
         header_row.addStretch(1)
         self.refresh_ping_btn = QPushButton("↻ Пинг")
         self.refresh_ping_btn.setToolTip("Перепроверить задержку до каждого сервера")
@@ -108,9 +114,31 @@ class ConfigsPickerDialog(QDialog):
         header_row.addWidget(self.refresh_ping_btn)
         layout.addLayout(header_row)
 
+        # Search box — substring match across name + server + port +
+        # protocol. Live-filtered as you type, clearable via the built-in
+        # X button on the right. v1.12.0. Critical when a subscription
+        # gives you 20-50 servers and finding "the German one" by scroll
+        # is annoying.
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText(
+            "Поиск (имя, IP, протокол, порт)…"
+        )
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        layout.addWidget(self.search_input)
+
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
         layout.addWidget(self.list_widget, stretch=1)
+
+        # Empty-state label — shown only when the search query yields
+        # zero matches. Without this the list silently goes blank and
+        # the user doesn't know if the picker is broken or just filtered.
+        self.empty_label = QLabel("Ничего не найдено")
+        self.empty_label.setObjectName("dim")
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setVisible(False)
+        layout.addWidget(self.empty_label)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
@@ -156,6 +184,61 @@ class ConfigsPickerDialog(QDialog):
                 self.list_widget.setCurrentItem(item)
         if self.list_widget.currentRow() < 0 and self._configs:
             self.list_widget.setCurrentRow(0)
+        # Re-apply the active search filter to the rebuilt list — if
+        # the user added/removed/imported configs while a query was in
+        # the search box, fresh items would otherwise all show.
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """Hide list items whose config doesn't match the search query.
+
+        Match is case-insensitive substring across name, server hostname,
+        port number, and protocol — so the user can type "fi" (country
+        flag prefix), "144.31" (server IP block), "vless" (protocol),
+        or "443" (port) and get the expected hits.
+        """
+        q = self.search_input.text().strip().lower() if hasattr(self, "search_input") else ""
+        visible = 0
+        total = self.list_widget.count()
+        for i in range(total):
+            item = self.list_widget.item(i)
+            cfg = item.data(Qt.UserRole)
+            if not q or self._matches(cfg, q):
+                item.setHidden(False)
+                visible += 1
+            else:
+                item.setHidden(True)
+        # Empty-state visibility — only "no match" when the user IS
+        # filtering (a literally empty config list isn't a search failure).
+        self.empty_label.setVisible(bool(q) and total > 0 and visible == 0)
+        # Count label — silent when no filter is active to avoid
+        # redundant "47 из 47", informative once the user starts typing.
+        if q:
+            self.count_label.setText(f"{visible} из {total}")
+        else:
+            self.count_label.setText("")
+        # If the currently-selected row got hidden by the filter, move
+        # selection to the first visible item so Enter / "Использовать"
+        # still does something sensible.
+        cur = self.list_widget.currentItem()
+        if cur is not None and cur.isHidden():
+            for i in range(total):
+                if not self.list_widget.item(i).isHidden():
+                    self.list_widget.setCurrentRow(i)
+                    break
+
+    def _on_search_changed(self, _text: str) -> None:
+        self._apply_filter()
+
+    @staticmethod
+    def _matches(cfg: ProxyConfig, q: str) -> bool:
+        haystack = " ".join([
+            cfg.name.lower(),
+            str(cfg.outbound.get("server") or "").lower(),
+            str(cfg.outbound.get("server_port") or ""),
+            cfg.protocol.lower(),
+        ])
+        return q in haystack
 
     def _format_item(self, cfg: ProxyConfig) -> str:
         srv = cfg.outbound.get("server", "?")

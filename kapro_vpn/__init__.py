@@ -1,2 +1,2 @@
 """KaproVPN — proxy client with split routing via a customizable direct-list."""
-__version__ = "1.11.0"
+__version__ = "1.12.0"
