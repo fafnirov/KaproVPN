@@ -90,7 +90,10 @@ class HomePage(QWidget):
         circle_row.addWidget(self.circle)
         circle_row.addStretch(1)
         layout.addLayout(circle_row)
-        layout.addSpacing(20)
+        # v1.14.5: 20 → 28 — gives more breathing room between the
+        # connect button's halo and the status text so the map+IP
+        # block sits visually lower, as the user requested.
+        layout.addSpacing(28)
 
         self.status_label = StatusLabel()
         layout.addWidget(self.status_label)
@@ -977,13 +980,14 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icons.app_icon())
         # 480 px gives Russian labels enough breathing room — at 420 the
         # radio-button text and a few hints were getting clipped.
-        # v1.14.4: height bumped 760 → 820 to fit the world map widget
-        # comfortably alongside circle + status + ip + sparkline. At 760
-        # Qt was squeezing the layout (~18 px overflow), causing the
-        # connect-button ring to graze the title above and the status
-        # text below. 820 leaves breathing room without any element
-        # needing a fixed bottom anchor.
-        self.setFixedSize(480, 820)
+        # v1.14.5: 820 → 870 to restore the connect button to a larger
+        # 220×220 (was 190 in v1.14.4) — at 190 the "ПОДКЛЮЧЕНИЕ…"
+        # state text didn't fit and clipped on the left, and the
+        # button no longer visually dominated the page the way the
+        # AmneziaVPN-style design wants. Extra 50 px gives room for
+        # the bigger button plus a wider gap between it and the
+        # status text below.
+        self.setFixedSize(480, 870)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowMinimizeButtonHint)
 
         self.manager = ConnectionManager(on_log=self.log_received.emit)

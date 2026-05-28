@@ -217,17 +217,19 @@ QPushButton#danger:hover {{
 QPushButton#circleBtn {{
     background-color: transparent;
     border: 3px solid {p.BORDER};
-    /* v1.14.4: 230×230 → 190×190 to free vertical space — at 230 the
-       button's ring grazed the title text above and the status text
-       below in the 480-wide window. 95 px radius matches the new
-       half-size. */
-    border-radius: 95px;
-    min-width: 190px; max-width: 190px;
-    min-height: 190px; max-height: 190px;
+    /* v1.14.5: 190 → 220 to dominate the page visually again — at 190
+       the button was the same size as the world map below it, which
+       killed the hierarchy ("the connect circle is the hero"). 220 +
+       smaller font (14pt) + tighter letter-spacing (1px instead of 2)
+       lets "ПОДКЛЮЧЕНИЕ…" fit inside the ring without clipping on
+       the left edge as it did at 190 / 15pt / 2px. */
+    border-radius: 110px;
+    min-width: 220px; max-width: 220px;
+    min-height: 220px; max-height: 220px;
     color: {p.TEXT_MUTED};
-    font-size: 15pt;
+    font-size: 14pt;
     font-weight: 600;
-    letter-spacing: 2px;
+    letter-spacing: 1px;
 }}
 
 QPushButton#circleBtn:hover {{
