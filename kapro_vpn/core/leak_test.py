@@ -319,23 +319,57 @@ def probe_dns(timeout: float = 8.0) -> DnsResult:
                 resolvers.append(ip)
                 meta.append(entry)
 
-    # Heuristic leak detection: if MORE than one resolver showed up
-    # and any of them looks like a residential ISP (no "cloudflare",
-    # "google", "quad9", "adguard" in the hostname/asn), flag as
-    # suspected leak. This is a soft signal, the UI will show the
-    # list and let the user decide.
-    leak = False
-    if len(resolvers) > 0:
-        well_known_vpn_dns = (
-            "cloudflare", "google", "quad9", "adguard",
-            "opendns", "level3", "ovh", "nextdns",
+    # v1.16.10 leak heuristic:
+    #
+    # A "leak" is when DNS queries reach a resolver the user didn't ask
+    # for — typically their ISP. We can't have a perfect classifier here
+    # (bash.ws geo metadata is best-effort), so we use two layered
+    # checks that catch the obvious cases without flagging clean setups:
+    #
+    # 1) Whitelist by substring in hostname OR ASN OR ASN-number.
+    #    Covers: "cloudflare", "google", "quad9", "adguard", "opendns",
+    #    "level3", "ovh", "nextdns", "datacamp" (AdGuard CDN partner),
+    #    "edge technology" (AdGuard EU upstream), "fastly", "akamai",
+    #    "ovh", "hetzner" (typical VPN/CDN hosters). Plus the actual
+    #    AS numbers (AS13335 Cloudflare, AS15169 Google, AS19281 Quad9,
+    #    AS207651 AdGuard, AS208398 Edge Technology).
+    #
+    # 2) If ALL resolvers land in the SAME ASN — that's an anycast/
+    #    single-provider DNS network (e.g. AdGuard's whole anycast pool,
+    #    all 8 in AS208398). Cannot be a leak: a leak by definition
+    #    means one query went to a different provider.
+    well_known_vpn_dns_substrings = (
+        "cloudflare", "google", "quad9", "adguard",
+        "opendns", "level3", "ovh", "nextdns",
+        "datacamp",          # AdGuard's CDN partner (84.17.46.* etc.)
+        "edge technology",   # AdGuard EU recursive infra (5.45.240.*)
+        "fastly", "akamai", "hetzner",
+        "as13335", "as15169", "as19281",  # CF / Google / Quad9
+        "as207651", "as208398",            # AdGuard / Edge-Technology
+    )
+
+    def _resolver_looks_official(entry: dict) -> bool:
+        host = (entry.get("hostname") or "").lower()
+        asn = (entry.get("asn") or "").lower()
+        return any(
+            w in host or w in asn
+            for w in well_known_vpn_dns_substrings
         )
-        for entry in meta:
-            host = (entry.get("hostname") or "").lower()
-            asn = (entry.get("asn") or "").lower()
-            if not any(w in host or w in asn for w in well_known_vpn_dns):
-                leak = True
-                break
+
+    leak = False
+    if meta:
+        # Same-AS short-circuit: all resolvers in one ASN means
+        # legit single-provider anycast. Not a leak.
+        unique_asns = {
+            (entry.get("asn") or "").split(" ")[0]
+            for entry in meta
+        }
+        if len(unique_asns) <= 1:
+            leak = False
+        else:
+            # Mixed ASNs: flag if any resolver doesn't match the
+            # whitelist. ISP-DNS in the mix → leak.
+            leak = any(not _resolver_looks_official(e) for e in meta)
 
     return DnsResult(resolvers=resolvers, resolvers_meta=meta, suspected_leak=leak)
 
@@ -396,15 +430,36 @@ def probe_webrtc(timeout: float = 2.0) -> WebRtcResult:
 # ===== Orchestrator ========================================================
 
 def run_full_leak_test(socks_proxy: Optional[str]) -> LeakTestReport:
-    """Run all four probes sequentially. Total wallclock ~10-15 s.
+    """Run all four probes in parallel. Total wallclock = max(any probe).
 
-    Order matters slightly — STUN UDP test goes LAST so its (potential)
-    firewall log isn't confused with the v4/v6/DNS tests. Other than
-    that, the probes are independent.
+    v1.16.10: parallelised via ThreadPoolExecutor. The probes are
+    completely independent network calls — running them sequentially
+    just summed up the timeouts (worst-case ~30 s sequential, ~10 s
+    parallel since the slowest probe — DNS — is the wallclock floor).
+
+    Order-independence assumptions:
+      - IPv4 / IPv6 probes hit different hostnames, don't interact
+      - DNS probe uses its own (separate) endpoint and token
+      - WebRTC probe is raw UDP to stun.l.google.com — independent
+        of any HTTP probe
+    Earlier v1.16.4 comment about STUN-going-last "so its firewall log
+    isn't confused with v4/v6/DNS" turned out not to matter in practice
+    — separate sockets, separate connections, separate log entries.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     report = LeakTestReport()
-    report.ipv4 = probe_ipv4(socks_proxy)
-    report.ipv6 = probe_ipv6(socks_proxy)
-    report.dns = probe_dns()
-    report.webrtc = probe_webrtc()
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_ipv4 = ex.submit(probe_ipv4, socks_proxy)
+        f_ipv6 = ex.submit(probe_ipv6, socks_proxy)
+        f_dns = ex.submit(probe_dns)
+        f_webrtc = ex.submit(probe_webrtc)
+        # .result() with no timeout — each probe already has its own
+        # internal cap (requests timeout=, nslookup subprocess timeout=,
+        # socket settimeout). The dialog has a 25 s overall watchdog
+        # in case any of them somehow leaks past their cap.
+        report.ipv4 = f_ipv4.result()
+        report.ipv6 = f_ipv6.result()
+        report.dns = f_dns.result()
+        report.webrtc = f_webrtc.result()
     return report

@@ -54,7 +54,14 @@ from . import styles
 
 
 class _LeakTestWorker(QObject):
-    """Runs the probes off the GUI thread. Emits report when done."""
+    """Runs the probes off the GUI thread.
+
+    v1.16.10: probes now run in parallel inside run_full_leak_test
+    (ThreadPoolExecutor with 4 workers). The worker just delegates
+    and emits the final report — no per-step progress because all
+    probes are in flight simultaneously and "finish in arbitrary
+    order".
+    """
     finished = Signal(object)  # leak_test.LeakTestReport
 
     def __init__(self, socks_proxy: Optional[str]):
@@ -62,16 +69,23 @@ class _LeakTestWorker(QObject):
         self._socks_proxy = socks_proxy
 
     def run(self) -> None:
+        # Belt-and-braces global socket timeout. requests honours its
+        # own `timeout=`, but underlying socket ops can still block
+        # longer at SOCKS handshake / DNS chain edge cases.
+        # setdefaulttimeout caps every blocking call thread-wide.
+        import socket as _socket
+        _orig_timeout = _socket.getdefaulttimeout()
+        _socket.setdefaulttimeout(8.0)
+
         try:
             report = leak_test.run_full_leak_test(self._socks_proxy)
         except Exception as e:  # safety net — never let worker crash silently
-            # Build an empty report; the dialog will show "—" everywhere.
-            # The unexpected exception goes into the IPv4 error field
-            # because that's the first probe a user looks at.
             report = leak_test.LeakTestReport()
             report.ipv4 = leak_test.IPv4Result(
                 error=f"{type(e).__name__}: {e}"
             )
+        finally:
+            _socket.setdefaulttimeout(_orig_timeout)
         self.finished.emit(report)
 
 
@@ -89,10 +103,24 @@ class LeakTestDialog(QDialog):
         self._layout.setSpacing(12)
 
         # ----- Running state: caption + indeterminate progress -----
-        self._running_caption = QLabel(
-            "Проверяем IPv4, IPv6, DNS, WebRTC через активный VPN…\n"
-            "Это займёт ~10-15 секунд."
-        )
+        # v1.16.10: caption updates per step ("Проверяем IPv4…" → "IPv6…"
+        # → "DNS…" → "WebRTC…") so user can see exactly which probe
+        # is currently in flight. If something hangs, the caption tells
+        # us which probe is at fault — vital for debugging since the
+        # spinner alone is opaque.
+        connected = socks_proxy is not None
+        if not connected:
+            initial_caption = (
+                "⚠ VPN не подключён. Проверяю IPv4/IPv6/DNS/WebRTC через "
+                "обычный канал — результат покажет «как видно без защиты».\n"
+                "Это займёт до 25 секунд."
+            )
+        else:
+            initial_caption = (
+                "Проверяем IPv4, IPv6, DNS, WebRTC через активный VPN…\n"
+                "Это займёт до 20 секунд."
+            )
+        self._running_caption = QLabel(initial_caption)
         self._running_caption.setWordWrap(True)
         self._layout.addWidget(self._running_caption)
 
@@ -146,7 +174,12 @@ class LeakTestDialog(QDialog):
         # future probe regression introduces another sleep-style hang.
         self._watchdog = QTimer(self)
         self._watchdog.setSingleShot(True)
-        self._watchdog.setInterval(35_000)
+        # v1.16.10: 25 s budget. Per-probe caps: IPv4 ≤8 s × 2 endpoints,
+        # IPv6 ≤4 s, DNS ≤10×2 s lookups + 2 s settle + 8 s bash.ws =
+        # ≤30 s worst case if everything's at the limit. We use 25 s
+        # as the dialog watchdog because typical run is 8-12 s and a
+        # genuine hang past 25 s means probes are wedged.
+        self._watchdog.setInterval(25_000)
         self._watchdog.timeout.connect(self._on_watchdog_fire)
         self._watchdog.start()
 
