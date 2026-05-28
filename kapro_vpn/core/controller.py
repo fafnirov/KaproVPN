@@ -397,6 +397,34 @@ class ConnectionManager:
             tun_dns_servers = dns_opt.plain_servers if dns_opt.plain_servers else TUN_DNS
             session.set_dns(tun.name, tun_dns_servers)
 
+            # v1.16.7: silence the physical NIC's DNS while VPN is up,
+            # but ONLY when a non-system DNS option is selected.
+            #
+            # Windows uses "Smart Multi-Homed Name Resolution": it sends
+            # the SAME DNS query in parallel to every interface that has
+            # DNS configured, and takes the first answer. With TUN having
+            # AdGuard and physical NIC keeping its DHCP-assigned ISP DNS
+            # (MGTS / Beeline / etc), one of the parallel queries went
+            # direct to the ISP-DNS over the real interface — the v1.16.6
+            # xray :53 hijack didn't catch it because that packet never
+            # entered the TUN. User's leak-test rightly flagged MGTS as
+            # a resolver despite the hijack being in place.
+            #
+            # Setting the physical NIC's DNS to empty (source=static,
+            # address=none) leaves Windows with only TUN's DNS — which
+            # routes through xray → hijack → AdGuard over VPN.
+            # session tracks the change so disconnect's cleanup restores
+            # DHCP-source DNS automatically.
+            #
+            # We keep the system-DNS option unchanged: if the user
+            # explicitly chose "system", they want their Pi-hole / corp
+            # DNS / whatever — leaving DHCP on the physical NIC is
+            # exactly what they asked for.
+            if dns_opt.plain_servers:
+                session.set_dns(real.name, [])  # empty = clear via address=none
+                self._log(f"[*] DNS на физическом интерфейсе очищен "
+                          f"(все запросы пойдут через TUN → {dns_opt.label_ru})")
+
             # Split-routing in TUN mode: xray's freedom outbound can't be
             # trusted alone because its outgoing packets still hit the kernel
             # routing table, which currently sends everything to TUN — that

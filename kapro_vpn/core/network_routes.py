@@ -221,8 +221,23 @@ def configure_tun_interface(iface: InterfaceInfo, address: str = "10.255.0.2",
 
 
 def set_dns(iface_name: str, servers: list[str]) -> None:
-    """Pin DNS servers on an interface (replaces DHCP-assigned ones)."""
+    """Pin DNS servers on an interface (replaces DHCP-assigned ones).
+
+    Empty list → CLEAR all DNS on this interface (source=static,
+    address=none). Windows DNS Client then has nothing to query on
+    this NIC and falls through to whatever other interface has DNS
+    configured. Used in TUN mode to silence the physical NIC so
+    parallel resolution can't leak queries to the ISP-DNS that
+    DHCP handed us.
+    """
     if not servers:
+        # Clear path — v1.16.7. The original empty-list early-return
+        # was wrong: it meant 'don't touch' but the caller expected
+        # 'wipe'. Explicit netsh now.
+        _run([
+            "netsh", "interface", "ipv4", "set", "dns",
+            f"name={iface_name}", "source=static", "address=none",
+        ])
         return
     _run([
         "netsh", "interface", "ipv4", "set", "dns",
