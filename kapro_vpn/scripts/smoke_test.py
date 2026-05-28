@@ -974,6 +974,66 @@ check("StatsPage: status flips independently of data (v1.15.3)",
 
 
 # ---------------------------------------------------------------------------
+# Test 8 — psutil TUN-iface stats source (v1.15.4)
+# ---------------------------------------------------------------------------
+# v1.15.4 replaced the unreliable `xray api stats` subprocess with a
+# direct psutil read on the named TUN device. Two things to guarantee:
+#   - psutil itself is importable (it's a requirement now)
+#   - query_tun_iface_stats() returns None for an unknown name and a
+#     valid TrafficStats with non-negative byte counters for an existing
+#     interface (the loopback is always present on every OS)
+
+section("psutil TUN-iface stats source")
+
+
+def _psutil_importable() -> None:
+    import psutil  # noqa: F401
+
+
+def _tun_iface_stats_unknown_name() -> None:
+    from kapro_vpn.core.xray_stats import query_tun_iface_stats
+    s = query_tun_iface_stats("DefinitelyNotARealNIC-123456")
+    if s is not None:
+        raise AssertionError(
+            f"query_tun_iface_stats with bogus name should return None, "
+            f"got {s}"
+        )
+
+
+def _tun_iface_stats_real_iface() -> None:
+    # Pick whatever interface psutil reports first that has non-zero
+    # bytes_recv — that's always present on a CI runner (loopback,
+    # primary NIC, etc.). On macOS lo0 is fine; on Linux lo; on Windows
+    # the loopback pseudo-interface or the runner NIC.
+    import psutil
+    counters = psutil.net_io_counters(pernic=True)
+    if not counters:
+        # Some sandboxed CI environments hide all NICs from psutil —
+        # not our bug. Skip rather than fail the build.
+        return
+    name = next(iter(counters.keys()))
+    from kapro_vpn.core.xray_stats import query_tun_iface_stats
+    s = query_tun_iface_stats(name)
+    if s is None:
+        raise AssertionError(
+            f"query_tun_iface_stats({name!r}) returned None for a real "
+            f"interface — psutil bridge broken"
+        )
+    if s.uplink_bytes < 0 or s.downlink_bytes < 0:
+        raise AssertionError(
+            f"negative byte counters: up={s.uplink_bytes} "
+            f"down={s.downlink_bytes}"
+        )
+    if s.timestamp <= 0:
+        raise AssertionError(f"timestamp not set: {s.timestamp}")
+
+
+check("psutil importable",                              _psutil_importable)
+check("query_tun_iface_stats: None for unknown iface",  _tun_iface_stats_unknown_name)
+check("query_tun_iface_stats: real iface returns data", _tun_iface_stats_real_iface)
+
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 

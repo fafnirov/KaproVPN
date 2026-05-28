@@ -1371,8 +1371,25 @@ class MainWindow(QMainWindow):
         self.tray.set_configs(self.configs, active_name, self._tray_pings)
 
     def _poll_traffic(self) -> None:
-        """Pull the latest cumulative byte counters and feed rates to HomePage."""
-        sample = xray_stats.query_stats()
+        """Pull the latest cumulative byte counters and feed rates to HomePage.
+
+        v1.15.4: source switched per mode. TUN mode → read kernel byte
+        counters from the named TUN interface via psutil (rock-solid,
+        zero subprocess overhead). HTTP-proxy mode → fall back to the
+        old `xray api stats` subprocess (the only way to get per-outbound
+        traffic when packets aren't isolated on a dedicated interface).
+
+        The `xray api stats` route had been silently returning None
+        in some user setups (v1.15.2/.3 user report) leaving the Stats
+        page rates stuck on "0 Б/с" forever — psutil makes that case
+        impossible because the TUN device counters always exist as
+        soon as tun2socks brings the interface up.
+        """
+        if self.manager.current_mode() == MODE_TUN:
+            from ..core.tun2socks_process import TUN_DEVICE_NAME
+            sample = xray_stats.query_tun_iface_stats(TUN_DEVICE_NAME)
+        else:
+            sample = xray_stats.query_stats()
         if sample is None:
             return
         if self._prev_traffic is None:

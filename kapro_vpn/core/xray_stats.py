@@ -78,6 +78,56 @@ def query_stats() -> Optional[TrafficStats]:
     return stats
 
 
+def query_tun_iface_stats(iface_name: str) -> Optional[TrafficStats]:
+    """Read cumulative byte counters straight off the TUN network interface.
+
+    Why this exists (v1.15.4): the `xray api stats` subprocess turned out
+    to be unreliable in the field — on some user setups it returns
+    nothing for minutes or never (likely a Windows-side issue with the
+    gRPC dokodemo-door inbound + Defender/firewall interactions on
+    127.0.0.1:10085). Reading the OS-level interface counters via
+    psutil is rock-solid by comparison: the kernel already maintains
+    those numbers for `ipconfig` / Task Manager.
+
+    The trade-off: this only works in TUN mode, where ALL VPN traffic
+    flows through our named TUN device (KaproTun on Windows, utun? on
+    macOS, kaprotun on Linux). In HTTP-proxy mode the traffic is mixed
+    with everything else on the physical interface — no clean way to
+    isolate it without xray's outbound-tagged counters.
+
+    Caller (controller / main_window) should pick:
+      - MODE_TUN  → query_tun_iface_stats(TUN_DEVICE_NAME)
+      - MODE_HTTP → query_stats() (xray api stats subprocess)
+
+    Returns None when:
+      - psutil isn't available (shouldn't happen — it's in requirements,
+        but we tolerate import errors so a missing wheel never breaks
+        the connect flow)
+      - the named interface isn't present yet (TUN device takes ~100 ms
+        to register after tun2socks launch — caller will see None on
+        the very first sample, then real data)
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        per_nic = psutil.net_io_counters(pernic=True)
+    except OSError:
+        return None
+    nic = per_nic.get(iface_name)
+    if nic is None:
+        return None
+    # psutil semantics: bytes_sent = bytes leaving us via this iface
+    # (uplink), bytes_recv = bytes arriving via this iface (downlink).
+    # Same direction convention as our TrafficStats.
+    return TrafficStats(
+        uplink_bytes=int(nic.bytes_sent),
+        downlink_bytes=int(nic.bytes_recv),
+        timestamp=time.time(),
+    )
+
+
 def format_rate(bps: float) -> str:
     """Bytes/second → human-readable string."""
     if bps < 1024:

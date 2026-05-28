@@ -56,6 +56,12 @@ a = Analysis(
         # the probe wraps everything in try/except. Result: empty IP label.
         # Forcing the import here makes PyInstaller bundle PySocks.
         'socks',
+        # psutil (v1.15.4) — used by xray_stats.query_tun_iface_stats to
+        # read live byte counters off the KaproTun interface. PyInstaller
+        # finds the top-level psutil import in xray_stats.py, but psutil's
+        # platform backend (psutil._psutil_windows) is loaded via C ext
+        # and the analyzer needs the hint to bundle the compiled .pyd.
+        'psutil',
     ],
     hookspath=[],
     hooksconfig={},
