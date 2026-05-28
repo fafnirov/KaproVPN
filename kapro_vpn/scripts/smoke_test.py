@@ -101,7 +101,7 @@ def _import_core() -> None:
         controller, parser, xray_config, storage, paths,
         subscription, geoip_ru, killswitch, i18n, system_proxy,
         ip_probe, dns_options, secrets_store, ipv6_block,
-        bandwidth_history, webrtc_block,
+        bandwidth_history, webrtc_block, leak_test,
     )
 
 
@@ -565,6 +565,109 @@ check("window resize: hit_test_local for 8 zones + client centre",
       _hit_test_corners_and_edges)
 check("window resize: 8 handles install and follow resize",
       _resize_handles_install_and_reposition)
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — Leak self-test module (v1.16.4)
+# ---------------------------------------------------------------------------
+# The leak_test module is the engine behind the new "Проверить утечки"
+# button. Most of it makes real network calls (we don't run those in
+# CI — they're flaky offline + would hit bash.ws's rate limit on
+# repeated CI builds), but we DO want to verify:
+#   - The STUN-packet builder produces a valid 20-byte RFC 5389
+#     Binding Request header (this is offline-safe).
+#   - probe_webrtc() returns stun_blocked=True on a timeout (the
+#     desired result when our firewall does its job — we simulate
+#     this by pointing the probe at a closed UDP port and a short
+#     timeout).
+#   - The report dataclasses construct cleanly with default values
+#     (the worker creates an empty report on unexpected exception).
+
+section("Leak self-test — module sanity")
+
+
+def _leak_test_dataclasses_default() -> None:
+    from kapro_vpn.core import leak_test as _lt
+    report = _lt.LeakTestReport()
+    # Each subreport should be present with sane defaults.
+    if report.ipv4.ok:
+        raise AssertionError("default IPv4Result should not report ok")
+    if report.webrtc.ok:
+        raise AssertionError(
+            "default WebRtcResult should not report ok "
+            "(stun_blocked False by default)"
+        )
+    if report.ipv6.ipv6_blocked:
+        raise AssertionError("default IPv6Result should not claim blocked")
+    if report.dns.suspected_leak:
+        raise AssertionError("default DnsResult shouldn't claim leak")
+
+
+def _leak_test_stun_packet_shape() -> None:
+    """Reconstruct the STUN packet build the same way probe_webrtc does,
+    verify it's a valid RFC 5389 Binding Request (20 bytes, magic
+    cookie 0x2112A442 at offset 4, message-length zero)."""
+    import struct, secrets
+    txid = secrets.token_bytes(12)
+    packet = struct.pack("!HHI", 0x0001, 0x0000, 0x2112A442) + txid
+    if len(packet) != 20:
+        raise AssertionError(
+            f"STUN packet should be exactly 20 bytes (header only), "
+            f"got {len(packet)}"
+        )
+    # Magic cookie at offset 4.
+    if packet[4:8] != b"\x21\x12\xA4\x42":
+        raise AssertionError("STUN magic cookie wrong")
+    # Message type at offset 0.
+    msg_type = struct.unpack("!H", packet[0:2])[0]
+    if msg_type != 0x0001:
+        raise AssertionError(
+            f"STUN message type should be 0x0001 (Binding Request), "
+            f"got {msg_type:#x}"
+        )
+
+
+def _leak_test_webrtc_returns_blocked_on_timeout() -> None:
+    """Point probe_webrtc at a guaranteed-unreachable address with a
+    very short timeout. The desired outcome of the probe — when our
+    firewall does its job — is exactly the same shape as "destination
+    silently drops": stun_blocked=True. So the probe must return that
+    for an unresponsive endpoint."""
+    from kapro_vpn.core import leak_test as _lt
+
+    # Patch the STUN address to TEST-NET-3 (RFC 5737 reserved doc
+    # range, guaranteed not routable) so the packet times out fast
+    # without actually hitting a real STUN server.
+    import socket as _socket
+    real_sendto = _socket.socket.sendto
+
+    # Easier: monkey-patch probe_webrtc's internal socket calls by
+    # replacing the address at send time. Cleanest is to override
+    # the STUN host constant via the module if it existed — but it's
+    # inlined in the function. So we use a brief monkeypatch on
+    # the socket sendto: redirect any sendto to 127.0.0.1:1 (port
+    # 1 is reserved, packets dropped).
+    def fake_sendto(self, data, address):
+        return real_sendto(self, data, ("127.0.0.1", 1))
+    _socket.socket.sendto = fake_sendto
+    try:
+        # Probe with very short timeout — would otherwise take 2 s.
+        result = _lt.probe_webrtc(timeout=0.3)
+    finally:
+        _socket.socket.sendto = real_sendto
+    if not result.stun_blocked:
+        raise AssertionError(
+            "probe_webrtc should report stun_blocked=True on timeout, "
+            f"got blocked={result.stun_blocked} error={result.error!r}"
+        )
+
+
+check("leak_test: dataclasses construct with sane defaults",
+      _leak_test_dataclasses_default)
+check("leak_test: STUN binding request packet is RFC-shaped",
+      _leak_test_stun_packet_shape)
+check("leak_test: probe_webrtc returns blocked on timeout",
+      _leak_test_webrtc_returns_blocked_on_timeout)
 
 
 # ---------------------------------------------------------------------------

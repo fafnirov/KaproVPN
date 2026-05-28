@@ -483,6 +483,29 @@ class SettingsPage(QWidget):
         webrtc_hint.setContentsMargins(28, 0, 0, 0)
         outer.addWidget(webrtc_hint)
 
+        # --- Leak self-test button (v1.16.4) ---
+        # Active probe of IPv4 / IPv6 / DNS / WebRTC. Doesn't write any
+        # state — just opens a modal dialog that runs the probes off
+        # the GUI thread and shows pass/fail. Useful proof that the
+        # 3 firewall rules + DNS routing actually work end-to-end.
+        leak_test_row = QHBoxLayout()
+        leak_test_row.setContentsMargins(28, 6, 0, 0)
+        self.leak_test_btn = QPushButton("Проверить утечки")
+        self.leak_test_btn.clicked.connect(self._on_leak_test_clicked)
+        leak_test_row.addWidget(self.leak_test_btn)
+        leak_test_row.addStretch(1)
+        outer.addLayout(leak_test_row)
+        leak_test_hint = QLabel(
+            "Запустит активную проверку: ваш ли это IPv4, утекает ли "
+            "IPv6 мимо туннеля, какие DNS-серверы вы используете, "
+            "проходит ли WebRTC STUN-запрос. Занимает ~10-15 секунд. "
+            "Используется только пока вы подключены к VPN."
+        )
+        leak_test_hint.setObjectName("dim")
+        leak_test_hint.setWordWrap(True)
+        leak_test_hint.setContentsMargins(28, 0, 0, 0)
+        outer.addWidget(leak_test_hint)
+
         # --- Public IP probe toggle (v1.10.0) ---
         # We dial one third-party endpoint (ipinfo.io) after connect to
         # show "Ваш IP: X (страна)" in the UI as visible proof the
@@ -772,6 +795,30 @@ class SettingsPage(QWidget):
     def _on_webrtc_leak_changed(self, checked: bool) -> None:
         self._manager.update_settings(webrtc_leak_protection=checked)
         self.settings_changed.emit()
+
+    def _on_leak_test_clicked(self) -> None:
+        """Open the leak-test dialog. Uses the SOCKS proxy that xray's
+        socks-in inbound listens on — that's listen_port+1 by convention
+        (see xray_config.py).
+
+        When VPN isn't connected we still let the dialog open — the
+        probes will get the user's REAL IP/DNS as a baseline, which
+        is useful for "what does the world see when I'm NOT on VPN?"
+        comparison. The probes themselves don't require an active
+        connection.
+        """
+        from .leak_test_dialog import LeakTestDialog
+        port = int(self._manager.settings.get("listen_port", 2080))
+        host = str(self._manager.settings.get("listen_host", "127.0.0.1"))
+        socks_proxy: Optional[str] = None
+        if self._manager.is_connected():
+            # SOCKS5 inbound is at port+1 (xray_config.py convention).
+            # socks5h:// = let the proxy do hostname resolution too,
+            # otherwise the system resolver runs FIRST and the probe
+            # reports the system DNS path instead of xray's.
+            socks_proxy = f"socks5h://{host}:{port + 1}"
+        dlg = LeakTestDialog(socks_proxy, parent=self.window())
+        dlg.exec()
 
     def _on_ip_probe_changed(self, checked: bool) -> None:
         self._manager.update_settings(public_ip_probe=checked)
