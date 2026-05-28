@@ -223,23 +223,30 @@ class IconButton(QPushButton):
 
 
 class NavBar(QWidget):
-    """Bottom navigation: Home / Settings / Add.
+    """Bottom navigation: Home / Stats / Settings / Add.
 
-    All three glyphs use the U+FE0E text-style variation selector so
-    Windows doesn't render any of them as a color emoji (the gear was
-    coming through bold and purple-grey, the others as thin outlines).
+    All glyphs use the U+FE0E text-style variation selector so Windows
+    doesn't render them as color emoji (the gear was coming through
+    bold and purple-grey, the others as thin outlines).
+
+    v1.15.0 added the Stats button (chart glyph) between Home and
+    Settings — that's the natural left-to-right reading order: home
+    state → look at history → tweak settings → add new config.
     """
 
     home_clicked = Signal()
+    stats_clicked = Signal()
     settings_clicked = Signal()
     add_clicked = Signal()
 
     # ︎ forces text-presentation form for any character that has an
-    # emoji variant. Gear and house both have one; "+" doesn't, but it's
-    # harmless on chars without an emoji form.
-    HOME_GLYPH = "⌂︎"      # ⌂ HOUSE
-    SETTINGS_GLYPH = "⚙︎"  # ⚙ GEAR
-    ADD_GLYPH = "+"                  # plain ASCII plus, scales better than ＋
+    # emoji variant. House/chart/gear all have one; "+" doesn't, but
+    # it's harmless on chars without an emoji form.
+    HOME_GLYPH = "⌂︎"        # ⌂ HOUSE
+    STATS_GLYPH = "📊︎"        # 📊 BAR CHART — keep text-style so it's
+                                # monochrome to match the other nav icons
+    SETTINGS_GLYPH = "⚙︎"    # ⚙ GEAR
+    ADD_GLYPH = "+"                    # plain ASCII plus
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -248,16 +255,18 @@ class NavBar(QWidget):
         layout.setSpacing(0)
 
         self.btn_home = IconButton(self.HOME_GLYPH, "Главная")
+        self.btn_stats = IconButton(self.STATS_GLYPH, "Статистика")
         self.btn_settings = IconButton(self.SETTINGS_GLYPH, "Настройки")
         self.btn_add = IconButton(self.ADD_GLYPH, "Добавить конфиг")
 
         self.btn_home.clicked.connect(self.home_clicked)
+        self.btn_stats.clicked.connect(self.stats_clicked)
         self.btn_settings.clicked.connect(self.settings_clicked)
         self.btn_add.clicked.connect(self.add_clicked)
 
-        # Three equal columns — perfect visual alignment regardless of
+        # Four equal columns — perfect visual alignment regardless of
         # window width. Stretch wrappers under each button centre them.
-        for btn in (self.btn_home, self.btn_settings, self.btn_add):
+        for btn in (self.btn_home, self.btn_stats, self.btn_settings, self.btn_add):
             cell = QWidget()
             cell_layout = QHBoxLayout(cell)
             cell_layout.setContentsMargins(0, 0, 0, 0)
@@ -267,8 +276,9 @@ class NavBar(QWidget):
             layout.addWidget(cell, stretch=1)
 
     def set_active(self, name: str) -> None:
-        """name ∈ {'home', 'settings', 'add'}"""
+        """name ∈ {'home', 'stats', 'settings', 'add'}"""
         self.btn_home.set_active(name == "home")
+        self.btn_stats.set_active(name == "stats")
         self.btn_settings.set_active(name == "settings")
         self.btn_add.set_active(name == "add")
 

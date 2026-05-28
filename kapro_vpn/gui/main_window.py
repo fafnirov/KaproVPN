@@ -48,6 +48,7 @@ from .add_page import AddConfigPage
 from .onboarding import OnboardingPage
 from .subscription_autorefresh import SubscriptionAutoRefresh
 from .config_dialog import AddConfigDialog
+from .stats_page import StatsPage
 from .world_map import WorldMapWidget
 from .configs_picker import ConfigsPickerDialog
 from .installer_dialog import ensure_geoip_ru_cached, ensure_tun2socks_installed, ensure_xray_installed
@@ -1014,6 +1015,12 @@ class MainWindow(QMainWindow):
         self._tray_pinger: Optional[object] = None  # _PingerThread instance
         self._connect_worker: Optional[_ConnectWorker] = None
         self._prev_traffic: Optional[xray_stats.TrafficStats] = None
+        # v1.15.0: rolling per-minute aggregation for the 24h stats db.
+        # _poll_traffic fires every 1s, but we only flush a row to
+        # bandwidth_history.record() once per 60-second window.
+        self._minute_up_bytes = 0
+        self._minute_down_bytes = 0
+        self._minute_window_start = 0
         self._update_worker: Optional[_UpdateCheckWorker] = None
         self._crash_notified = False  # avoid spamming the same kill-switch toast
         # Auto-reconnect state: when xray dies without us asking, we try
@@ -1057,11 +1064,16 @@ class MainWindow(QMainWindow):
         self.logs_page = LogsPage()
         self.add_page = AddConfigPage()
         self.onboarding_page = OnboardingPage()
+        # v1.15.0: 24-hour bandwidth chart page. Same theme-getter so
+        # the chart's colors track live theme switches.
+        self.stats_page = StatsPage()
+        self.stats_page.set_theme_getter(_theme)
         self.stack.addWidget(self.home_page)        # index 0
         self.stack.addWidget(self.settings_page)    # index 1
         self.stack.addWidget(self.logs_page)        # index 2
         self.stack.addWidget(self.add_page)         # index 3
         self.stack.addWidget(self.onboarding_page)  # index 4
+        self.stack.addWidget(self.stats_page)       # index 5
         root.addWidget(self.stack, stretch=1)
 
         nav_sep = QFrame()
@@ -1133,6 +1145,7 @@ class MainWindow(QMainWindow):
         self.onboarding_page.subscription_clicked.connect(self._on_import_subscription)
         self.onboarding_page.add_config_clicked.connect(self._on_open_add_page)
         self.nav.home_clicked.connect(lambda: self._goto("home"))
+        self.nav.stats_clicked.connect(lambda: self._goto("stats"))
         self.nav.settings_clicked.connect(lambda: self._goto("settings"))
         self.nav.add_clicked.connect(self._on_open_add_page)
         self.log_received.connect(self.logs_page.append)
@@ -1160,6 +1173,7 @@ class MainWindow(QMainWindow):
             "settings": (1, "settings"),
             "logs":     (2, None),     # no nav highlight for logs
             "add":      (3, "add"),
+            "stats":    (5, "stats"),  # v1.15.0
         }.get(name, (0, "home"))
         if target_index == self.stack.currentIndex():
             return
@@ -1354,13 +1368,34 @@ class MainWindow(QMainWindow):
             # First sample of the session — record but don't display until we
             # have a delta to compute rate from.
             self._prev_traffic = sample
+            self._minute_window_start = int(time.time())
             return
+        # Per-second deltas for the home-page rates display.
+        up_delta = max(0, sample.uplink_bytes - self._prev_traffic.uplink_bytes)
+        down_delta = max(0, sample.downlink_bytes - self._prev_traffic.downlink_bytes)
         up_rate, down_rate = sample.delta_rate(self._prev_traffic)
         self._prev_traffic = sample
         self.home_page.set_traffic(
             up_rate, down_rate,
             sample.uplink_bytes, sample.downlink_bytes,
         )
+        # v1.15.0: roll the per-second deltas into a 60-second bucket,
+        # flush to the bandwidth-history db at minute boundaries. We
+        # write a row only when the window closes — keeps the db slim
+        # (one row per minute instead of one per second).
+        self._minute_up_bytes += up_delta
+        self._minute_down_bytes += down_delta
+        now = int(time.time())
+        if now - self._minute_window_start >= 60:
+            from ..core import bandwidth_history
+            bandwidth_history.record(
+                self._minute_up_bytes,
+                self._minute_down_bytes,
+                ts=self._minute_window_start,
+            )
+            self._minute_up_bytes = 0
+            self._minute_down_bytes = 0
+            self._minute_window_start = now
 
     # --- actions ----------------------------------------------------------
 

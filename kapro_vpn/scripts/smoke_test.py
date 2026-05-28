@@ -101,6 +101,7 @@ def _import_core() -> None:
         controller, parser, xray_config, storage, paths,
         subscription, geoip_ru, killswitch, i18n, system_proxy,
         ip_probe, dns_options, secrets_store, ipv6_block,
+        bandwidth_history,
     )
 
 
@@ -110,7 +111,7 @@ def _import_gui() -> None:
     from kapro_vpn.gui import (  # noqa: F401
         main_window, tray, widgets, onboarding,
         configs_picker, subscription_dialog, sites_dialog,
-        world_map,
+        world_map, bandwidth_chart, stats_page,
     )
 
 
@@ -598,6 +599,106 @@ def _flag_emoji_extracts_country_code() -> None:
 
 
 check("world map: flag-emoji -> ISO code fallback",   _flag_emoji_extracts_country_code)
+
+
+# ---------------------------------------------------------------------------
+# Test 5.9 — Bandwidth history (v1.15.0)
+# ---------------------------------------------------------------------------
+# round-trip record() → recent_24h() and rolling-window cleanup.
+# Uses an isolated temp dir for the db so we don't trash a developer's
+# real history when running smoke locally. clear() at the end keeps
+# the temp file empty for re-runs.
+
+section("Bandwidth history — sqlite round-trip")
+
+import tempfile as _tempfile
+import time as _time
+from pathlib import Path as _Path
+from kapro_vpn.core import bandwidth_history as _bw
+from kapro_vpn.core import paths as _paths
+
+# Redirect the db to a temp file for the duration of this test section.
+# bandwidth_history reads paths.app_data_dir() at db-open time, so we
+# patch it. Original restored at the end.
+_orig_data_dir = _paths.app_data_dir
+_smoke_tmpdir = _Path(_tempfile.mkdtemp(prefix="kapro-smoke-bw-"))
+_paths.app_data_dir = lambda: _smoke_tmpdir
+
+
+def _bw_round_trip() -> None:
+    _bw.clear()
+    now = int(_time.time())
+    _bw.record(1024, 4096, ts=now - 60)
+    _bw.record(2048, 8192, ts=now - 30)
+    rows = _bw.recent_24h()
+    if len(rows) != 2:
+        raise AssertionError(f"expected 2 rows, got {len(rows)}")
+    if rows[0].up_bytes != 1024 or rows[0].down_bytes != 4096:
+        raise AssertionError(f"row[0] payload wrong: {rows[0]}")
+    if rows[1].up_bytes != 2048 or rows[1].down_bytes != 8192:
+        raise AssertionError(f"row[1] payload wrong: {rows[1]}")
+
+
+def _bw_totals() -> None:
+    _bw.clear()
+    now = int(_time.time())
+    _bw.record(100, 200, ts=now - 60)
+    _bw.record(300, 400, ts=now - 30)
+    up, down = _bw.totals_24h()
+    if up != 400 or down != 600:
+        raise AssertionError(f"totals broken: up={up} down={down}, expected 400/600")
+
+
+def _bw_zero_sample_skipped() -> None:
+    # Zero deltas don't get inserted — keeps the db slim when the user
+    # is connected but idle.
+    _bw.clear()
+    _bw.record(0, 0)
+    rows = _bw.recent_24h()
+    if rows:
+        raise AssertionError(f"zero-sample insert should have been skipped, got {rows}")
+
+
+def _bw_rolling_cleanup() -> None:
+    # Records older than 24h must be auto-deleted on next write.
+    _bw.clear()
+    now = int(_time.time())
+    _bw.record(99, 99, ts=now - 25 * 3600)  # 25h old → should get cleaned
+    _bw.record(100, 100, ts=now - 60)       # fresh
+    rows = _bw.recent_24h()
+    if len(rows) != 1:
+        raise AssertionError(
+            f"rolling cleanup broken: expected 1 row, got {len(rows)}"
+        )
+    if rows[0].up_bytes != 100:
+        raise AssertionError(
+            f"wrong row survived cleanup: {rows[0]}"
+        )
+
+
+def _bw_negative_delta_clamped() -> None:
+    # If xray restarts mid-session its cumulative counter rolls back,
+    # we'd compute a negative delta — the recorder must clamp to 0 to
+    # avoid polluting the chart with phantom dips.
+    _bw.clear()
+    _bw.record(-100, -100)
+    rows = _bw.recent_24h()
+    if rows:  # negative delta clamped to 0 → falls into zero-skip → no row
+        raise AssertionError(
+            f"negative delta should clamp+skip, got {rows}"
+        )
+
+
+check("bandwidth: record + recent_24h round-trip",  _bw_round_trip)
+check("bandwidth: totals_24h sums correctly",       _bw_totals)
+check("bandwidth: zero-byte samples not inserted",  _bw_zero_sample_skipped)
+check("bandwidth: rows older than 24h auto-cleaned", _bw_rolling_cleanup)
+check("bandwidth: negative deltas clamp to 0",      _bw_negative_delta_clamped)
+
+# Restore — leave the global state clean for downstream sections that
+# might depend on paths.app_data_dir() pointing at the real location.
+_bw.clear()
+_paths.app_data_dir = _orig_data_dir
 
 
 # ---------------------------------------------------------------------------
