@@ -98,7 +98,10 @@ def load_sites() -> list[str]:
         source = paths.bundled_default_sites()
     try:
         data = json.loads(source.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, FileNotFoundError):
+    except (json.JSONDecodeError, FileNotFoundError, UnicodeDecodeError):
+        # UnicodeDecodeError: a stray non-utf8 byte (partial write, AV
+        # quarantine restore, disk corruption) must not crash startup —
+        # fall back to "no custom sites" like load_configs does.
         return []
     sites = data.get("sites", []) if isinstance(data, dict) else data
     return [str(s).strip().lower() for s in sites if str(s).strip()]
@@ -149,7 +152,12 @@ def load_settings() -> dict[str, Any]:
         return dict(DEFAULT_SETTINGS)
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        # UnicodeDecodeError: settings.json is the very first file read at
+        # launch (main.py -> i18n.init_from_settings). A corrupted byte
+        # here would crash before the window ever opens — and a startup
+        # crash means the in-app auto-updater never runs, leaving the user
+        # permanently stuck. Fall back to defaults instead.
         return dict(DEFAULT_SETTINGS)
     merged = dict(DEFAULT_SETTINGS)
     merged.update(data if isinstance(data, dict) else {})

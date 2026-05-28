@@ -1395,6 +1395,51 @@ check("query_tun_iface_stats: real iface returns data", _tun_iface_stats_real_if
 
 
 # ---------------------------------------------------------------------------
+# Test 11 — corrupted local files don't crash startup (v1.16.11)
+# ---------------------------------------------------------------------------
+# A stray non-utf8 byte in settings.json / sites.json (partial write, AV
+# quarantine restore, disk corruption) used to raise UnicodeDecodeError at
+# launch. Because it's a *startup* crash, the in-app auto-updater never got
+# a chance to ship the fix — the user was stuck. load_settings / load_sites
+# must degrade to defaults instead of raising.
+
+section("Corrupted local files — no startup crash")
+
+from kapro_vpn.core import storage as _storage
+
+_bad_tmpdir = _Path(_tempfile.mkdtemp(prefix="kapro-smoke-corrupt-"))
+_bad_settings = _bad_tmpdir / "settings.json"
+_bad_sites = _bad_tmpdir / "sites.json"
+# 0x9d is an invalid utf-8 start byte — exactly the failure users reported.
+_bad_settings.write_bytes(b'{"language":\x9d "ru"}')
+_bad_sites.write_bytes(b'{"sites":\x9d ["x"]}')
+
+_orig_settings_file = _paths.settings_file
+_orig_sites_file = _paths.sites_file
+_paths.settings_file = lambda: _bad_settings
+_paths.sites_file = lambda: _bad_sites
+
+
+def _load_settings_no_crash() -> None:
+    s = _storage.load_settings()
+    if not isinstance(s, dict) or s.get("listen_port") != 2080:
+        raise AssertionError(f"expected DEFAULT_SETTINGS fallback, got {s!r}")
+
+
+def _load_sites_no_crash() -> None:
+    out = _storage.load_sites()
+    if out != []:
+        raise AssertionError(f"expected [] fallback, got {out!r}")
+
+
+check("load_settings: corrupt utf-8 -> defaults", _load_settings_no_crash)
+check("load_sites: corrupt utf-8 -> []",          _load_sites_no_crash)
+
+_paths.settings_file = _orig_settings_file
+_paths.sites_file = _orig_sites_file
+
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 
