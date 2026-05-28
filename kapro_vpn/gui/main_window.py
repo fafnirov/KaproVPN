@@ -595,6 +595,39 @@ class SettingsPage(QWidget):
         dns_footer.setContentsMargins(28, 0, 0, 0)
         outer.addWidget(dns_footer)
 
+        # --- DNS leak protection toggle (v1.16.8) ---
+        # Independent of the DNS option above. When ON, xray hijacks all
+        # :53 traffic to its dns-out outbound, re-resolves through the
+        # selected provider (or Cloudflare fallback for System), and
+        # transports the upstream query through the VPN tunnel. The
+        # physical NIC's DNS is also cleared at connect so Windows'
+        # Smart Multi-Homed Name Resolution can't query the ISP-DNS
+        # in parallel. Result: ISP sees only encrypted VPN bytes.
+        # OFF preserves the legacy "direct :53" path for users with
+        # Pi-hole / corporate / locally-pinned DNS that they need.
+        self.dns_leak_check = QCheckBox(
+            "Защита от DNS-утечек — заворачивать DNS-запросы в VPN-туннель"
+        )
+        self.dns_leak_check.setChecked(
+            bool(manager.settings.get("dns_leak_protection", True))
+        )
+        self.dns_leak_check.toggled.connect(self._on_dns_leak_changed)
+        outer.addWidget(self.dns_leak_check)
+        dns_leak_hint = QLabel(
+            "С включённой защитой: все DNS-запросы перенаправляются на "
+            "выбранный DNS-сервер выше (или Cloudflare 1.1.1.1 для "
+            "опции «Системный»), маршрут через VPN. Провайдер видит "
+            "только зашифрованный VPN-трафик. "
+            "<b>Выключите</b>, если у вас Pi-hole, корпоративный DNS или "
+            "локально настроенный резолвер, который должен реально "
+            "отвечать на запросы."
+        )
+        dns_leak_hint.setObjectName("dim")
+        dns_leak_hint.setWordWrap(True)
+        dns_leak_hint.setTextFormat(Qt.RichText)
+        dns_leak_hint.setContentsMargins(28, 0, 0, 0)
+        outer.addWidget(dns_leak_hint)
+
         # --- Language toggle ---
         # Lives in Security section because it's the only other "global
         # preference" — too small to deserve its own section header.
@@ -794,6 +827,10 @@ class SettingsPage(QWidget):
 
     def _on_webrtc_leak_changed(self, checked: bool) -> None:
         self._manager.update_settings(webrtc_leak_protection=checked)
+        self.settings_changed.emit()
+
+    def _on_dns_leak_changed(self, checked: bool) -> None:
+        self._manager.update_settings(dns_leak_protection=checked)
         self.settings_changed.emit()
 
     def _on_leak_test_clicked(self) -> None:

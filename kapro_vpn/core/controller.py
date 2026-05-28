@@ -397,33 +397,25 @@ class ConnectionManager:
             tun_dns_servers = dns_opt.plain_servers if dns_opt.plain_servers else TUN_DNS
             session.set_dns(tun.name, tun_dns_servers)
 
-            # v1.16.7: silence the physical NIC's DNS while VPN is up,
-            # but ONLY when a non-system DNS option is selected.
+            # v1.16.7 / v1.16.8: silence the physical NIC's DNS to prevent
+            # Windows' Smart Multi-Homed Name Resolution from parallel-
+            # querying the DHCP-assigned ISP DNS (MGTS / Beeline / etc)
+            # alongside our TUN DNS. With physical NIC's DNS cleared,
+            # the only DNS Windows can use is TUN's — which routes
+            # through xray → hijack → upstream over VPN.
             #
-            # Windows uses "Smart Multi-Homed Name Resolution": it sends
-            # the SAME DNS query in parallel to every interface that has
-            # DNS configured, and takes the first answer. With TUN having
-            # AdGuard and physical NIC keeping its DHCP-assigned ISP DNS
-            # (MGTS / Beeline / etc), one of the parallel queries went
-            # direct to the ISP-DNS over the real interface — the v1.16.6
-            # xray :53 hijack didn't catch it because that packet never
-            # entered the TUN. User's leak-test rightly flagged MGTS as
-            # a resolver despite the hijack being in place.
+            # Tied to the dns_leak_protection toggle (v1.16.8), not the
+            # DNS option. User who turns protection OFF — usually because
+            # they need Pi-hole / corporate / locally-pinned DNS to
+            # actually answer — keeps the physical NIC's DNS intact.
             #
-            # Setting the physical NIC's DNS to empty (source=static,
-            # address=none) leaves Windows with only TUN's DNS — which
-            # routes through xray → hijack → AdGuard over VPN.
-            # session tracks the change so disconnect's cleanup restores
+            # Session tracks the change so disconnect's cleanup restores
             # DHCP-source DNS automatically.
-            #
-            # We keep the system-DNS option unchanged: if the user
-            # explicitly chose "system", they want their Pi-hole / corp
-            # DNS / whatever — leaving DHCP on the physical NIC is
-            # exactly what they asked for.
-            if dns_opt.plain_servers:
+            if bool(self.settings.get("dns_leak_protection", True)):
                 session.set_dns(real.name, [])  # empty = clear via address=none
-                self._log(f"[*] DNS на физическом интерфейсе очищен "
-                          f"(все запросы пойдут через TUN → {dns_opt.label_ru})")
+                self._log("[*] DNS на физическом интерфейсе очищен "
+                          "(защита от утечек: все запросы пойдут через TUN → "
+                          "DoH-upstream через VPN)")
 
             # Split-routing in TUN mode: xray's freedom outbound can't be
             # trusted alone because its outgoing packets still hit the kernel
@@ -491,9 +483,12 @@ class ConnectionManager:
     def _write_and_check(self, config: ProxyConfig, direct_domains: list[str],
                          host: str, port: int) -> str:
         dns_option = str(self.settings.get("dns_option", "system"))
+        dns_leak_protection = bool(self.settings.get("dns_leak_protection", True))
         try:
             path = xray_config.write_config(
-                config, direct_domains, host, port, dns_option=dns_option,
+                config, direct_domains, host, port,
+                dns_option=dns_option,
+                dns_leak_protection=dns_leak_protection,
             )
         except (ValueError, NotImplementedError) as e:
             raise ConnectionError(f"Конфиг не поддерживается: {e}") from e

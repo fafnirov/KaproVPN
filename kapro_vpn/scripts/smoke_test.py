@@ -201,42 +201,38 @@ def _make_dns_check(opt_key: str):
     opt = dns_options.get(opt_key)
 
     def inner() -> None:
+        # v1.16.8: leak protection is a SEPARATE toggle, default True.
+        # Pass it explicitly so the check exercises the protected path
+        # (the typical user setting); a sibling test below verifies
+        # the opt-out OFF path produces the legacy direct :53 rules.
         full = build_config(
             _vless_cfg,
             direct_domains=["example.com"],
             dns_option=opt_key,
+            dns_leak_protection=True,
         )
         json.dumps(full, ensure_ascii=False)  # must remain serialisable
 
-        if opt_key == "system":
-            if "dns" in full:
+        # DNS block in xray config: present only when the option has
+        # its own DoH servers (system has none — falls back to a
+        # Cloudflare hijack upstream but no top-level dns block).
+        if opt.doh_servers:
+            if "dns" not in full:
+                raise AssertionError(f"{opt_key}: dns block missing")
+            if full["dns"].get("queryStrategy") != "UseIPv4":
                 raise AssertionError(
-                    "system DNS option should NOT emit a dns block "
-                    "(xray rejects empty servers)"
+                    f"{opt_key}: queryStrategy must be UseIPv4"
                 )
-            return
+            servers = full["dns"].get("servers", [])
+            if servers != opt.doh_servers:
+                raise AssertionError(
+                    f"{opt_key}: dns servers mismatch — got {servers}, "
+                    f"expected {opt.doh_servers}"
+                )
 
-        # Named option (adguard/cloudflare/quad9): dns block must exist
-        # with the expected DoH endpoints and IPv4-only strategy.
-        if "dns" not in full:
-            raise AssertionError(f"{opt_key}: dns block missing")
-        if full["dns"].get("queryStrategy") != "UseIPv4":
-            raise AssertionError(
-                f"{opt_key}: queryStrategy must be UseIPv4"
-            )
-        servers = full["dns"].get("servers", [])
-        if servers != opt.doh_servers:
-            raise AssertionError(
-                f"{opt_key}: dns servers mismatch — got {servers}, "
-                f"expected {opt.doh_servers}"
-            )
-
-        # v1.16.6: when a non-system DNS option is active, ALL :53
-        # queries (TCP + UDP) must be hijacked to the dns-out outbound,
-        # which xray then re-resolves via the chosen upstream over the
-        # VPN tunnel. This was the missing piece — v1.16.5's leak test
-        # caught the ISP seeing every domain query because :53 was
-        # routed direct (bypass_ips rule). New design: tunnel them.
+        # With dns_leak_protection=True, ALL :53 (TCP + UDP) must be
+        # hijacked to dns-out — independent of which DNS option is
+        # selected. System falls back to a Cloudflare upstream.
         hijack_rule = next(
             (r for r in full["routing"]["rules"]
              if r.get("outboundTag") == "dns-out"
@@ -245,10 +241,9 @@ def _make_dns_check(opt_key: str):
         )
         if hijack_rule is None:
             raise AssertionError(
-                f"{opt_key}: missing :53 → dns-out hijack rule. "
-                f"Without it, the system resolver's DNS queries go "
-                f"out the VPN exit unmodified and the ISP can sniff "
-                f"the destination resolver's IP."
+                f"{opt_key} (leak protection ON): missing :53 → dns-out "
+                f"hijack rule. Without it, system resolver queries go out "
+                f"the VPN exit unmodified and ISP can sniff destinations."
             )
         if "tcp,udp" not in (hijack_rule.get("network") or ""):
             raise AssertionError(
@@ -256,11 +251,9 @@ def _make_dns_check(opt_key: str):
                 f":53; got network={hijack_rule.get('network')!r}"
             )
 
-        # dns-out outbound must exist with protocol=dns and address
-        # set to the chosen provider's plain IPv4 (xray DNS outbound
-        # doesn't support DoH transport — that's why we hijack at the
-        # routing layer and re-resolve via plain DNS through the VPN
-        # tunnel; encryption comes from the VPN, not from the DNS hop).
+        # dns-out outbound must exist with protocol=dns and a sensible
+        # upstream IP. For named options it's their first plain_server;
+        # for system it's the Cloudflare fallback (1.1.1.1).
         dns_out = next(
             (o for o in full["outbounds"] if o.get("tag") == "dns-out"),
             None,
@@ -273,10 +266,11 @@ def _make_dns_check(opt_key: str):
                 f"{dns_out.get('protocol')!r}"
             )
         upstream = dns_out.get("settings", {}).get("address")
-        if upstream not in opt.plain_servers:
+        expected_upstreams = opt.plain_servers or ["1.1.1.1", "1.0.0.1"]
+        if upstream not in expected_upstreams:
             raise AssertionError(
-                f"{opt_key}: dns-out address {upstream!r} is not in "
-                f"the option's plain_servers {opt.plain_servers}"
+                f"{opt_key}: dns-out address {upstream!r} not in "
+                f"expected upstreams {expected_upstreams}"
             )
 
         # v1.9.1: AdGuard option (and ONLY adguard) must add a block-rule
@@ -305,6 +299,55 @@ def _make_dns_check(opt_key: str):
 
 for opt in dns_options.OPTIONS:
     check(f"dns_option={opt.key}", _make_dns_check(opt.key))
+
+
+# v1.16.8: opt-out path. With dns_leak_protection=False the config
+# must NOT contain the :53 hijack rule or the dns-out outbound, AND
+# must contain the legacy direct :53 rules (so Pi-hole / corp DNS
+# users can actually reach their resolver). Independent of DNS option.
+def _dns_leak_protection_off_produces_direct_rules() -> None:
+    full = build_config(
+        _vless_cfg,
+        direct_domains=["example.com"],
+        dns_option="system",
+        dns_leak_protection=False,
+    )
+    json.dumps(full, ensure_ascii=False)
+
+    # No dns-out outbound when protection is off.
+    if any(o.get("tag") == "dns-out" for o in full["outbounds"]):
+        raise AssertionError(
+            "dns-out outbound should NOT exist when leak protection "
+            "is OFF — defeats the user's Pi-hole / corp DNS choice"
+        )
+    if any(r.get("outboundTag") == "dns-out"
+           for r in full["routing"]["rules"]):
+        raise AssertionError(
+            "no rule should route to dns-out when leak protection is OFF"
+        )
+    # Legacy direct :53 rules (UDP + TCP) must be present so user's
+    # resolver of choice can actually answer.
+    direct_53_udp = any(
+        r.get("outboundTag") == "direct"
+        and r.get("network") == "udp"
+        and r.get("port") == "53"
+        for r in full["routing"]["rules"]
+    )
+    direct_53_tcp = any(
+        r.get("outboundTag") == "direct"
+        and r.get("network") == "tcp"
+        and r.get("port") == "53"
+        for r in full["routing"]["rules"]
+    )
+    if not (direct_53_udp and direct_53_tcp):
+        raise AssertionError(
+            "leak protection OFF must restore the v1.8.0 'direct :53' "
+            "rules so Pi-hole / corp DNS users can reach their resolver"
+        )
+
+
+check("dns_leak_protection=False: direct :53 rules restored, no hijack",
+      _dns_leak_protection_off_produces_direct_rules)
 
 
 # ---------------------------------------------------------------------------

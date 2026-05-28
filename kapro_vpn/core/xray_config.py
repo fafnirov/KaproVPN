@@ -281,6 +281,7 @@ def build_config(
     listen_port: int = DEFAULT_LISTEN_PORT,
     log_level: str = "warning",
     dns_option: str = "system",
+    dns_leak_protection: bool = True,
 ) -> dict[str, Any]:
     """Build a complete Xray-core client config with split routing.
 
@@ -288,16 +289,40 @@ def build_config(
     outbound as the default for non-matching traffic, so domains not in the
     direct list go through `proxy` automatically.
 
-    dns_option (from core/dns_options.py) controls how DNS resolution
-    happens. "system" — let the OS resolve everything, no xray-side dns
-    block. For named options (adguard/cloudflare/quad9) we add a `dns`
-    block with DoH servers AND a routing rule that forces those servers'
-    plain IPs to "direct" (so DoH-over-443 from apps that bypass xray's
-    own resolver still doesn't tunnel through the VPN).
+    Two independent axes control DNS behavior:
+
+      dns_option (core/dns_options.py)
+        WHICH resolver to use. "system" keeps the OS chain. Named options
+        (adguard/cloudflare/quad9) point xray's `dns` block at the
+        provider's DoH endpoint for xray's own resolution work.
+
+      dns_leak_protection (v1.16.8, bool)
+        WHETHER to tunnel DNS through VPN. When True:
+          - port :53 (TCP/UDP) gets hijacked to a `dns-out` outbound that
+            re-resolves via a plain-DNS upstream (the provider's plain IPs
+            if non-system, else Cloudflare 1.1.1.1 as a safe fallback)
+          - transport of the upstream query rides the VPN tunnel (the
+            outbound dns uses proxy outbound by default)
+        When False:
+          - port :53 goes direct (out the physical NIC) — the v1.8.0
+            "DNS-leak hardening" legacy behavior. Pi-hole / corporate /
+            locally-pinned DNS keeps working. ISP sees domain queries.
     """
     proxy_outbound = proxy_to_xray_outbound(proxy)
     cleaned = sorted({d.strip().lower() for d in direct_domains if d.strip()})
     dns_opt = dns_options.get(dns_option)
+
+    # Pick the upstream IP for the :53 hijack when leak protection is on.
+    # System option has no plain_servers of its own, so we fall back to
+    # Cloudflare — the most-used public resolver, fast, no logging.
+    # User who wants a different fallback can pick adguard/cloudflare/
+    # quad9 explicitly in Settings.
+    _LEAK_PROTECTION_FALLBACK = ("1.1.1.1", "1.0.0.1")
+    hijack_upstream = (
+        dns_opt.plain_servers[0]
+        if dns_opt.plain_servers
+        else _LEAK_PROTECTION_FALLBACK[0]
+    )
 
     # `domain:foo.bar` in Xray matches foo.bar AND any *.foo.bar
     domain_rules = [f"domain:{d}" for d in cleaned]
@@ -323,32 +348,14 @@ def build_config(
          "ip": ["224.0.0.0/4", "255.255.255.255/32"]},
         {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
     ]
-    # v1.16.6: DNS handling fork by user's chosen DNS option.
-    #
-    # The v1.8.0 "DNS-leak hardening" forced ALL :53 traffic to the
-    # `direct` outbound — bypassing the VPN tunnel entirely. The
-    # original intent: prevent the VPN provider from logging the
-    # user's DNS queries. The unintended consequence: the user's
-    # REAL ISP sees every domain queried in plaintext, because the
-    # query goes straight out the physical NIC to the ISP-handed
-    # DNS resolver (MGTS, Beeline, etc).
-    #
-    # The user's v1.16.5 leak-test report made this concrete: VPN
-    # exit was Netherlands, but bash.ws logged Moscow ISP resolvers
-    # asking for the test subdomains. Privacy fail.
-    #
-    # New behaviour:
-    #   - DNS option == system → keep the old "direct :53" route.
-    #     User asked for system DNS, we don't second-guess.
-    #   - DNS option != system → route :53 to a dedicated xray "dns"
-    #     outbound that intercepts every query and re-resolves it
-    #     through the chosen provider (AdGuard/Cloudflare/Quad9).
-    #     Transport of the upstream query goes through `proxy` (the
-    #     VPN), so the ISP sees only encrypted VPN bytes — not the
-    #     domain names being asked for.
-    if dns_opt.plain_servers:
-        # Non-system: hijack :53 to dns-out outbound. This MUST come
-        # before any IP-based rules — those would steal the query
+    # v1.16.8: DNS handling now controlled by the dns_leak_protection
+    # toggle, NOT by which DNS option is selected. The two axes are
+    # independent — see build_config docstring above.
+    if dns_leak_protection:
+        # Hijack ALL :53 traffic to dns-out, which re-resolves through
+        # plain upstream and routes transport via proxy (VPN tunnel).
+        # ISP sees encrypted VPN bytes, not domain queries. This MUST
+        # come before any IP-based rules — those would steal the query
         # before it reaches the hijack.
         rules.append({
             "type": "field",
@@ -357,18 +364,16 @@ def build_config(
             "port": "53",
         })
     else:
-        # System DNS: legacy behaviour, send :53 direct so the user
-        # can keep their Pi-hole / corporate / locally-configured
-        # DNS chain working. ISP sees queries — that's the trade-
-        # off the user accepted by leaving the default.
+        # Opt-out: legacy "direct :53" behavior for users with Pi-hole,
+        # corporate split-DNS, or any locally-pinned resolver they
+        # need to actually use. ISP sees queries — that's the trade-
+        # off the user accepted by turning leak-protection off.
         rules.append({"type": "field", "outboundTag": "direct",
                       "network": "udp", "port": "53"})
         rules.append({"type": "field", "outboundTag": "direct",
                       "network": "tcp", "port": "53"})
         # Belt-and-braces: queries to common public resolvers also
-        # go direct in system mode, in case some app hardcoded one.
-        # In non-system mode we deliberately DON'T add this — we WANT
-        # those tunnelled so MGTS can't sniff them.
+        # go direct, in case some app hardcoded one.
         rules.append({"type": "field", "outboundTag": "direct", "ip": [
             "1.1.1.1/32", "1.0.0.1/32",      # Cloudflare
             "8.8.8.8/32", "8.8.4.4/32",      # Google
@@ -501,22 +506,22 @@ def build_config(
             proxy_outbound,
             {"tag": "direct", "protocol": "freedom"},
             {"tag": "block", "protocol": "blackhole"},
-            # v1.16.6: dns-out — intercepts queries from the :53 hijack
-            # rule above (only present when dns_option != system).
-            # protocol="dns" makes xray forward the query to the
-            # chosen plain upstream resolver. Transport uses outbounds[0]
-            # (proxy/VPN) so the ISP can't sniff the request content.
-            # For "system" we don't add this outbound at all — the
-            # :53 rules above keep going through "direct" as before.
+            # v1.16.8: dns-out present whenever leak-protection is on
+            # (regardless of DNS option). Upstream IP comes from the
+            # selected option if it has one (adguard/cloudflare/quad9),
+            # else falls back to Cloudflare 1.1.1.1 — that's the case
+            # for the "System" option with protection on.
+            # Transport rides outbounds[0] (proxy/VPN), so ISP sees
+            # encrypted bytes, not DNS content.
             *([{
                 "tag": "dns-out",
                 "protocol": "dns",
                 "settings": {
-                    "address": dns_opt.plain_servers[0],
+                    "address": hijack_upstream,
                     "port": 53,
                     "network": "tcp,udp",
                 },
-            }] if dns_opt.plain_servers else []),
+            }] if dns_leak_protection else []),
         ],
         "routing": {
             "domainStrategy": "IPIfNonMatch",
@@ -537,9 +542,12 @@ def write_config(
     listen_host: str = DEFAULT_LISTEN_HOST,
     listen_port: int = DEFAULT_LISTEN_PORT,
     dns_option: str = "system",
+    dns_leak_protection: bool = True,
 ) -> str:
     config = build_config(
-        proxy, direct_domains, listen_host, listen_port, dns_option=dns_option,
+        proxy, direct_domains, listen_host, listen_port,
+        dns_option=dns_option,
+        dns_leak_protection=dns_leak_protection,
     )
     target = paths.runtime_config_file()
     target.write_text(

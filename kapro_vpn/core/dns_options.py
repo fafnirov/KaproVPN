@@ -45,6 +45,11 @@ class DnsOption:
 
 # `system` — the leave-it-alone option. No xray dns block, no TUN override,
 # no extra bypass routes. Whatever the OS resolved through DHCP wins.
+#
+# Leak protection (whether DNS goes through the tunnel vs. direct to ISP)
+# is controlled by the separate settings.dns_leak_protection toggle — NOT
+# by which option is selected here. That way users keep both axes of
+# control: WHICH resolver, and WHETHER to tunnel queries.
 SYSTEM = DnsOption(
     key="system",
     label_ru="Системный",

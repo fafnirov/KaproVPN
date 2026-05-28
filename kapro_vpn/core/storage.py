@@ -137,6 +137,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "public_ip_probe": True,  # fetch & show "Ваш IP: X (страна)" after connect
     "ipv6_leak_protection": True,  # block global-unicast IPv6 outbound in TUN mode
     "webrtc_leak_protection": True,  # block STUN UDP (3478/5349/19302/19305-19308) so browsers can't leak real IP via WebRTC
+    "dns_leak_protection": True,  # hijack :53 to VPN-tunneled DoH/upstream + silence physical-NIC DNS so ISP can't see queries
     "theme": "auto",  # "auto" (follow OS) / "dark" / "light" — see gui/styles.py
     "window_size": [480, 870],  # [w, h] — restored on launch, saved on close
 }
