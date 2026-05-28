@@ -250,7 +250,51 @@ class StatsPage(QWidget):
         )
         self._session_label.setText("За сессию: —")
 
-    # ----- LIVE feed (pushed from MainWindow._poll_traffic) ----------------
+    # ----- LIVE feed (pushed from MainWindow) ------------------------------
+    # Split into two channels:
+    #   set_live_connected()  — status flip, owned by _refresh_home which
+    #                           reads manager.is_connected() at 1 Hz. This
+    #                           is the SOURCE OF TRUTH for the badge and
+    #                           must update even when xray-api stats poll
+    #                           is failing (e.g. first second after
+    #                           connect, before the api inbound is ready).
+    #   on_live_sample()      — bytes/rates, fed when _poll_traffic gets a
+    #                           real sample. May fire later than the
+    #                           connect-flip; rates show "0 Б/с" until.
+    #
+    # Earlier (v1.15.2) the two were collapsed into on_live_sample, which
+    # meant the live block stayed "Не подключено" while xray-api stats
+    # subprocess was still timing out — exactly when the user has just
+    # hit Connect and expects to see SOMETHING.
+
+    def set_live_connected(self, connected: bool) -> None:
+        """Update the status badge + base rate styling.
+
+        Idempotent — cheap no-op when state already matches.
+        Called from MainWindow._refresh_home every second so it reflects
+        manager.is_connected() truthfully, regardless of whether the
+        xray-api stats subprocess has answered yet.
+        """
+        if connected == self._live_connected:
+            return
+        self._live_connected = connected
+        if connected:
+            self._apply_connected_styling()
+            # Show "0 Б/с" placeholders so the layout looks alive even
+            # before the first traffic sample lands. Headline numbers
+            # go to full text color.
+            self._down_rate_label.setStyleSheet(
+                "color: #fafafa; font-size: 22pt; font-weight: 600;"
+            )
+            self._up_rate_label.setStyleSheet(
+                "color: #fafafa; font-size: 22pt; font-weight: 600;"
+            )
+            self._down_rate_label.setText(format_rate(0))
+            self._up_rate_label.setText(format_rate(0))
+            self._session_label.setText("За сессию: считаем…")
+        else:
+            self._apply_disconnected_styling()
+            self.live_sparkline.reset()
 
     def on_live_sample(
         self,
@@ -259,22 +303,17 @@ class StatsPage(QWidget):
         up_total: int,
         down_total: int,
     ) -> None:
-        """Receive one per-second traffic sample from the connection poller.
+        """Receive one per-second traffic sample from _poll_traffic.
 
-        Idempotent — called every second while connected. Updates the
-        big numbers, the sparkline buffer, and the session-totals line.
+        Pure data update — doesn't touch the connection-state badge.
+        That's set_live_connected()'s job (called separately every tick).
         """
+        # Defensive: if we're getting samples but somehow weren't told
+        # we're connected, flip the badge anyway. The connect path
+        # should drive that via set_live_connected, but the data is
+        # itself proof of connection.
         if not self._live_connected:
-            self._live_connected = True
-            self._apply_connected_styling()
-            # Headline numbers come back at full text color (themed) once
-            # we have real data to put in them.
-            self._down_rate_label.setStyleSheet(
-                "color: #fafafa; font-size: 22pt; font-weight: 600;"
-            )
-            self._up_rate_label.setStyleSheet(
-                "color: #fafafa; font-size: 22pt; font-weight: 600;"
-            )
+            self.set_live_connected(True)
 
         self._down_rate_label.setText(format_rate(down_bps))
         self._up_rate_label.setText(format_rate(up_bps))
@@ -284,18 +323,11 @@ class StatsPage(QWidget):
         )
         self.live_sparkline.add_sample(up_bps, down_bps)
 
+    # Backwards-compat alias — older callers (and the v1.15.2 smoke test
+    # case) used on_live_disconnected(). Keep it pointing at the new
+    # explicit API so we don't have to touch every call site.
     def on_live_disconnected(self) -> None:
-        """Reset the live block when the tunnel goes down.
-
-        Called from MainWindow._refresh_home on the disconnected branch.
-        Cheap no-op when already in the disconnected state so 1 Hz polling
-        doesn't thrash labels.
-        """
-        if not self._live_connected:
-            return
-        self._live_connected = False
-        self._apply_disconnected_styling()
-        self.live_sparkline.reset()
+        self.set_live_connected(False)
 
     # ----- 24h block -------------------------------------------------------
 

@@ -1350,15 +1350,22 @@ class MainWindow(QMainWindow):
             mode_tag = "TUN" if self.manager.current_mode() == MODE_TUN else "HTTP"
             self.home_page.set_state("connected", f"{timer} · {mode_tag}")
             self.tray.set_state("connected", active_name)
+            # v1.15.3: flip the Stats live-block badge based on the
+            # connection-manager truth BEFORE attempting to poll xray
+            # stats. _poll_traffic may fail / skip the first sample —
+            # but the badge should already say "● Подключено" because
+            # we ARE connected. (v1.15.2 bug: badge stayed "Не
+            # подключено" until on_live_sample fired, which never
+            # happened if xray-api stats was slow.)
+            self.stats_page.set_live_connected(True)
             self._poll_traffic()
         else:
             self.home_page.set_state("idle")
             self.tray.set_state("idle", active_name)
             self._prev_traffic = None  # reset session counter when disconnected
-            # v1.15.2: reset live-block on Stats page so the sparkline
-            # empties and the "Не подключено" badge appears. Cheap no-op
-            # when already disconnected (page tracks its own flag).
-            self.stats_page.on_live_disconnected()
+            # Reset live-block on Stats: sparkline empties + badge greys.
+            # Cheap no-op when already disconnected (page tracks its own flag).
+            self.stats_page.set_live_connected(False)
 
         self.home_page.set_config(self._active_config)
         self.tray.set_configs(self.configs, active_name, self._tray_pings)

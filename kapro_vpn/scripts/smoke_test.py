@@ -906,7 +906,71 @@ def _stats_page_live_api() -> None:
     page.on_live_disconnected()
 
 
+def _stats_page_status_independent_of_data() -> None:
+    """v1.15.3 regression: status badge must flip on set_live_connected()
+    even when on_live_sample() has not yet been called.
+
+    Reproduces the v1.15.2 user bug — `_poll_traffic` may return early
+    on the first second after connect (xray-api stats subprocess slow
+    or not ready), so on_live_sample doesn't fire. The status badge
+    must still say "● Подключено" because _refresh_home pushed it via
+    set_live_connected(True).
+    """
+    _setup_qt_app()
+    from kapro_vpn.gui.stats_page import StatsPage
+
+    page = StatsPage()
+
+    # Simulate _refresh_home tick on a fresh connect — status flips,
+    # but no sample yet.
+    page.set_live_connected(True)
+    if not page._live_connected:
+        raise AssertionError(
+            "set_live_connected(True) failed to flip _live_connected"
+        )
+    # Status badge text changed — that's the user-visible thing.
+    badge = page._status_label.text()
+    if "Подключено" not in badge or "●" not in badge:
+        raise AssertionError(
+            f"status badge should show '● Подключено' after "
+            f"set_live_connected(True), got {badge!r}"
+        )
+    # Rates show placeholders, not em-dashes — the layout must look
+    # alive even before data arrives.
+    if page._down_rate_label.text() == "—":
+        raise AssertionError(
+            f"rate label still '—' after connect — should be a "
+            f"'0 Б/с' placeholder, got {page._down_rate_label.text()!r}"
+        )
+    if page._session_label.text() == "За сессию: —":
+        raise AssertionError(
+            "session label still '—' after connect — should hint "
+            "'считаем…'"
+        )
+
+    # Status flip should be idempotent: second call with same value
+    # is a no-op (we check by ensuring no exception and state stable).
+    page.set_live_connected(True)
+    if not page._live_connected:
+        raise AssertionError("idempotent set_live_connected(True) lost state")
+
+    # Going back to disconnected must reset both badge and rates.
+    page.set_live_connected(False)
+    if page._live_connected:
+        raise AssertionError(
+            "set_live_connected(False) failed to flip _live_connected"
+        )
+    badge = page._status_label.text()
+    if "Не подключено" not in badge or "○" not in badge:
+        raise AssertionError(
+            f"status badge should show '○ Не подключено' after "
+            f"set_live_connected(False), got {badge!r}"
+        )
+
+
 check("StatsPage: live block sample+disconnect cycle", _stats_page_live_api)
+check("StatsPage: status flips independently of data (v1.15.3)",
+      _stats_page_status_independent_of_data)
 
 
 # ---------------------------------------------------------------------------
