@@ -50,9 +50,61 @@ import json
 import secrets
 import socket
 import struct
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _resolve_with_hard_timeout(host: str, timeout: float = 2.0) -> None:
+    """Fire a DNS lookup for `host` with a wallclock cap.
+
+    Why we don't use socket.gethostbyname directly: it has NO timeout
+    parameter, and socket.setdefaulttimeout only affects socket I/O,
+    not the underlying resolver. When the system DNS chain is
+    misconfigured / mid-reconfiguration (e.g. right after toggling
+    DNS-leak protection but before reconnecting VPN), gethostbyname
+    can hang for minutes per lookup, freezing the probe entirely.
+    The user's v1.16.8 report was 10+ lookups × hang = forever.
+
+    On Windows nslookup is always present in PATH; on other platforms
+    we fall back to a daemon-thread + Event combo so a single hang
+    doesn't block the rest of probe_dns. Either way, the call returns
+    in at most `timeout` seconds.
+
+    We don't return the resolved IP — probe_dns only uses the side
+    effect of HITTING the resolver, which bash.ws then reports back
+    on. Errors (NXDOMAIN, timeout) are intentional and swallowed.
+    """
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["nslookup", host],
+                capture_output=True, timeout=timeout,
+                creationflags=_NO_WINDOW,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        return
+    # POSIX fallback: daemon thread with a join-timeout. The thread
+    # may keep blocking after we move on but it won't keep our caller
+    # waiting (daemon flag means process exit kills it).
+    import threading
+    done = threading.Event()
+
+    def _target() -> None:
+        try:
+            socket.gethostbyname(host)
+        except (socket.gaierror, OSError):
+            pass
+        finally:
+            done.set()
+
+    threading.Thread(target=_target, daemon=True).start()
+    done.wait(timeout)
 
 try:
     import requests
@@ -229,14 +281,13 @@ def probe_dns(timeout: float = 8.0) -> DnsResult:
     #   {i}.{ID}.bash.ws
     for i in range(1, 11):
         host = f"{i}.{token}.bash.ws"
-        try:
-            socket.gethostbyname(host)
-        except socket.gaierror:
-            # NXDOMAIN is normal — these subdomains intentionally don't
-            # exist. We just need the resolver to try.
-            pass
-        except OSError:
-            pass
+        # Hard 2-second cap per lookup. v1.16.9 fix: bare gethostbyname
+        # could hang for minutes when the DNS chain was mid-reconfig
+        # (e.g. after toggling leak-protection but before VPN reconnect),
+        # making the whole probe lock the dialog. nslookup-via-subprocess
+        # respects timeout properly. We don't care about NXDOMAIN /
+        # timeout outcomes — only that bash.ws got asked.
+        _resolve_with_hard_timeout(host, timeout=2.0)
 
     # Step 2: wait for bash.ws to aggregate the resolver hits, then
     # ask. 2 seconds — 1 sec was sometimes too tight under load and

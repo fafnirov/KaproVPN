@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -134,9 +134,29 @@ class LeakTestDialog(QDialog):
         self._worker.finished.connect(self._thread.quit)
         self._thread.start()
 
+        # ----- Watchdog (v1.16.9) ----------------------------------------
+        # Probes have wallclock budgets in code: IPv4 ≤12 s (2 endpoints
+        # × 6 s), IPv6 ≤4 s, DNS ≤10×2 s lookups + 2 s settle + 8 s for
+        # bash.ws GET, WebRTC ≤2 s. Worst-case ≈48 s, typical ≈12 s.
+        # User v1.16.8 report: dialog stuck at "Проверяем…" for 30+ s
+        # — root cause was bare gethostbyname hanging without timeout
+        # (now fixed in leak_test._resolve_with_hard_timeout). Belt-and-
+        # braces: this watchdog fires after 35 s and forcibly shows a
+        # timeout error so the dialog never wedges forever even if some
+        # future probe regression introduces another sleep-style hang.
+        self._watchdog = QTimer(self)
+        self._watchdog.setSingleShot(True)
+        self._watchdog.setInterval(35_000)
+        self._watchdog.timeout.connect(self._on_watchdog_fire)
+        self._watchdog.start()
+
     # ----- result handling -------------------------------------------------
 
     def _on_report(self, report: leak_test.LeakTestReport) -> None:
+        # Worker finished cleanly — disarm the watchdog so it doesn't
+        # try to overwrite the results 35 s later.
+        if self._watchdog.isActive():
+            self._watchdog.stop()
         # Swap the "Проверяем…" caption + progress for the results.
         self._running_caption.setVisible(False)
         self._progress.setVisible(False)
@@ -210,7 +230,33 @@ class LeakTestDialog(QDialog):
             lines.append(f"• {ip}    {tail}" if tail else f"• {ip}")
         return "\n".join(lines) if lines else "(нет данных)"
 
+    def _on_watchdog_fire(self) -> None:
+        """Probes exceeded the 35 s overall budget — show timeout error.
+
+        Worker thread might still be churning (DNS resolver hang etc.).
+        We can't safely kill a QThread, but we CAN stop showing the
+        spinner and present a useful error. Worker becomes a daemon —
+        if it later emits finished, _on_report will harmlessly redraw.
+        """
+        self._running_caption.setVisible(False)
+        self._progress.setVisible(False)
+        # Show all rows as ✗ with a generic timeout message — the user
+        # gets something actionable instead of an indefinite spinner.
+        self._row_ipv4.set_fail("таймаут — VPN отключён или сеть тормозит?")
+        self._row_ipv6.set_fail("таймаут")
+        self._row_dns.set_fail(
+            "таймаут — DNS не отвечает за 35 с. Проверь VPN/настройки."
+        )
+        self._row_webrtc.set_fail("таймаут")
+        for row in (self._row_ipv4, self._row_ipv6,
+                    self._row_dns, self._row_webrtc):
+            row.setVisible(True)
+        self.adjustSize()
+
     def closeEvent(self, event) -> None:  # noqa: N802
+        # Disarm watchdog so it doesn't fire on a half-dead dialog.
+        if self._watchdog.isActive():
+            self._watchdog.stop()
         # Make sure the worker thread tears down cleanly before the dialog
         # is destroyed — otherwise Qt warns "QThread destroyed while still
         # running" on exit.
