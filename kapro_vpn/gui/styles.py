@@ -217,11 +217,15 @@ QPushButton#danger:hover {{
 QPushButton#circleBtn {{
     background-color: transparent;
     border: 3px solid {p.BORDER};
-    border-radius: 115px;        /* must equal width/2 = height/2 */
-    min-width: 230px; max-width: 230px;
-    min-height: 230px; max-height: 230px;
+    /* v1.14.4: 230×230 → 190×190 to free vertical space — at 230 the
+       button's ring grazed the title text above and the status text
+       below in the 480-wide window. 95 px radius matches the new
+       half-size. */
+    border-radius: 95px;
+    min-width: 190px; max-width: 190px;
+    min-height: 190px; max-height: 190px;
     color: {p.TEXT_MUTED};
-    font-size: 16pt;
+    font-size: 15pt;
     font-weight: 600;
     letter-spacing: 2px;
 }}

@@ -119,10 +119,14 @@ COUNTRY_COORDS: dict[str, tuple[float, float]] = {
 }
 
 
-# Map widget dimensions. 2:1 aspect matches equirectangular — wider
-# would just empty-ocean padding, narrower would crush continents.
-_MAP_W = 400
-_MAP_H = 200
+# Map widget dimensions. ~2.3:1 aspect — slightly wider than 2:1
+# equirectangular pure-square would suggest, but the trimmed bottom
+# leaves Antarctic empty-space out and gives more vertical budget for
+# everything else in the home window. v1.14.4: shrunk from 400×200 to
+# 320×140 so the home page fits in the 480×820 window without Qt
+# having to squeeze the circle/status/ip stack into overlapping rows.
+_MAP_W = 320
+_MAP_H = 140
 
 
 def _project(lat: float, lon: float, width: int, height: int) -> QPointF:

@@ -977,7 +977,13 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icons.app_icon())
         # 480 px gives Russian labels enough breathing room — at 420 the
         # radio-button text and a few hints were getting clipped.
-        self.setFixedSize(480, 760)
+        # v1.14.4: height bumped 760 → 820 to fit the world map widget
+        # comfortably alongside circle + status + ip + sparkline. At 760
+        # Qt was squeezing the layout (~18 px overflow), causing the
+        # connect-button ring to graze the title above and the status
+        # text below. 820 leaves breathing room without any element
+        # needing a fixed bottom anchor.
+        self.setFixedSize(480, 820)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowMinimizeButtonHint)
 
         self.manager = ConnectionManager(on_log=self.log_received.emit)
