@@ -456,6 +456,66 @@ check("ipv6_block targets 2000::/3 only (LAN-preserving)",
       _ipv6_block_uses_global_unicast_only)
 
 
+# v1.18.1: IPv6-leak protection must be armed in HTTP-proxy mode too, not
+# just TUN. Earlier builds only armed it in TUN, so the default HTTP mode
+# leaked the real IPv6 on a leak test. These guard against silent reverts.
+
+def _ipv6_arm_gating() -> None:
+    from kapro_vpn.core import controller as ctrl
+    mgr = ctrl.ConnectionManager(on_log=lambda _l: None)
+    orig = (ctrl.admin.is_admin, ctrl.ipv6_block.is_supported, ctrl.ipv6_block.install)
+    installs = {"n": 0}
+    ctrl.ipv6_block.is_supported = lambda: True
+    ctrl.ipv6_block.install = lambda: (installs.__setitem__("n", installs["n"] + 1) or True)
+    try:
+        ctrl.admin.is_admin = lambda: True
+        mgr.settings = {"ipv6_leak_protection": True}
+        mgr._maybe_arm_ipv6_block()
+        if installs["n"] != 1:
+            raise AssertionError("ipv6 block not armed when setting on + admin")
+        mgr.settings = {"ipv6_leak_protection": False}
+        mgr._maybe_arm_ipv6_block()
+        if installs["n"] != 1:
+            raise AssertionError("ipv6 block armed despite setting off")
+        ctrl.admin.is_admin = lambda: False  # can't netsh without admin
+        mgr.settings = {"ipv6_leak_protection": True}
+        mgr._maybe_arm_ipv6_block()
+        if installs["n"] != 1:
+            raise AssertionError("ipv6 block 'armed' without admin — impossible")
+    finally:
+        (ctrl.admin.is_admin, ctrl.ipv6_block.is_supported, ctrl.ipv6_block.install) = orig
+
+
+def _http_connect_arms_ipv6_block() -> None:
+    # The actual leak fix: HTTP-mode connect must call _maybe_arm_ipv6_block.
+    # Stub the heavy steps so no real xray/proxy/firewall work happens.
+    from kapro_vpn.core import controller as ctrl
+    from kapro_vpn.core.parser import ProxyConfig as PC
+    mgr = ctrl.ConnectionManager(on_log=lambda _l: None)
+    calls = {"ipv6": 0}
+    mgr._maybe_start_hysteria = lambda cfg: None
+    mgr._write_and_check = lambda *a, **k: None
+    mgr._start_xray = lambda: None
+    mgr._maybe_arm_killswitch = lambda: None
+    mgr._maybe_arm_webrtc_block = lambda: None
+    mgr._maybe_arm_ipv6_block = lambda: calls.__setitem__("ipv6", calls["ipv6"] + 1)
+    mgr.settings = dict(mgr.settings)
+    mgr.settings["auto_set_system_proxy"] = False  # skip the real registry write
+    cfg = PC(name="t", protocol="vless", raw_url="vless://x@127.0.0.1:1",
+             outbound={"server": "127.0.0.1", "server_port": 1})
+    mgr._connect_http(cfg, [])
+    if calls["ipv6"] != 1:
+        raise AssertionError(
+            "HTTP connect didn't arm IPv6-leak protection — the v6 leak "
+            "in the default mode is back"
+        )
+
+
+check("ipv6 arming honors setting + admin gate", _ipv6_arm_gating)
+check("HTTP-mode connect arms IPv6-leak protection (v1.18.1)",
+      _http_connect_arms_ipv6_block)
+
+
 # ---------------------------------------------------------------------------
 # Test 5.7 — WebRTC leak block (v1.16.0)
 # ---------------------------------------------------------------------------

@@ -243,6 +243,12 @@ class ConnectionManager:
         # browser WebRTC STUN packets are UDP and would go straight
         # out the real NIC, exposing the real IP to any JavaScript.
         self._maybe_arm_webrtc_block()
+        # v1.18.1: IPv6-leak protection in HTTP mode too. System proxy only
+        # redirects TCP from proxy-aware apps over IPv4 — the OS keeps full
+        # native IPv6, so a leak test (or any app) would expose the real v6
+        # address. Same firewall block we use in TUN mode closes it. Needs
+        # admin; if the user isn't elevated it skips with a clear warning.
+        self._maybe_arm_ipv6_block()
         if self.settings.get("auto_set_system_proxy", True):
             self._saved_proxy_state = system_proxy.get_state()
             try:
@@ -594,15 +600,22 @@ class ConnectionManager:
                       "— продолжаю без него")
 
     def _maybe_arm_ipv6_block(self) -> None:
-        """If user enabled IPv6-leak protection in settings, install the
-        global-unicast block via Windows Firewall. TUN-only — in HTTP
-        mode the v6 stack isn't tunnelled either way; that's a known
-        HTTP-mode limitation we document, not something to silently
-        plug here (would surprise the user).
+        """Install the global-unicast IPv6 block if the user enabled
+        IPv6-leak protection. Armed in BOTH modes (v1.18.1):
 
-        Same silent-skip conditions as _maybe_arm_killswitch: setting
-        off, non-Windows, no admin. Not raising on failure — protection
-        is defence-in-depth, the v4 tunnel works fine without it.
+          - TUN mode tunnels only IPv4, so native v6 would bypass the
+            tunnel entirely.
+          - HTTP-proxy mode only redirects TCP from proxy-aware apps over
+            IPv4 — the OS keeps full native IPv6, so a leak test (or any
+            app) sees the real v6 address. The same firewall block closes
+            both. (Earlier builds left this TUN-only, which is the IPv6
+            leak users hit in the default HTTP mode.)
+
+        Needs admin (netsh advfirewall) — same silent-skip conditions as
+        _maybe_arm_killswitch. HTTP mode often runs un-elevated, so when we
+        can't install we say plainly that v6 may leak and point at TUN /
+        running as admin, rather than pretending it's protected. Not
+        raising on failure — the v4 path works either way.
         """
         if not self.settings.get("ipv6_leak_protection", True):
             return
@@ -610,7 +623,9 @@ class ConnectionManager:
             self._log("[!] IPv6-leak protection пока работает только на Windows")
             return
         if not admin.is_admin():
-            self._log("[!] IPv6-leak protection требует админа — пропускаю")
+            self._log("[!] Защита от IPv6-утечек требует прав администратора — "
+                      "IPv6 может утекать мимо туннеля. Запусти KaproVPN от "
+                      "имени администратора или используй TUN-режим.")
             return
         if ipv6_block.install():
             self._log("[*] IPv6-leak protection активирована "
