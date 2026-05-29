@@ -1195,6 +1195,85 @@ check("Maintenance Reinstall button starts install flow",
       _make_installer_check("maint->install", _maintenance_reinstall_button_starts_install))
 
 
+# --- v1.17.4: stop running app before reinstall/uninstall ------------------
+# Reinstall used to crash with PermissionError [Errno 13] because it
+# overwrote KaproVPN.exe while the app was still running and holding the
+# Windows file lock. stop_running_app() now clears that first.
+
+def _exe_lock_probe_handles_missing_and_unlocked():
+    import os as _os
+    import tempfile
+    from pathlib import Path as _P
+
+    from installer import operations
+
+    # Missing file → not locked, so stop_running_app() no-ops on a fresh
+    # install instead of trying to kill a process that isn't there.
+    missing = _P(tempfile.gettempdir()) / "kapro-smoke-does-not-exist.exe"
+    if missing.exists():
+        missing.unlink()
+    if operations._exe_is_locked(missing):
+        raise AssertionError("_exe_is_locked must be False for a missing file")
+
+    # Existing but unlocked file → not locked, and the probe must not
+    # mangle the file (append-mode open + immediate close writes nothing).
+    fd, name = tempfile.mkstemp(suffix=".exe")
+    _os.write(fd, b"MZ\x00\x00payload")
+    _os.close(fd)
+    try:
+        before = _P(name).read_bytes()
+        if operations._exe_is_locked(_P(name)):
+            raise AssertionError("_exe_is_locked must be False for an unlocked file")
+        if _P(name).read_bytes() != before:
+            raise AssertionError("_exe_is_locked must not modify the probed file")
+    finally:
+        _os.unlink(name)
+
+
+def _stop_running_app_noops_when_not_installed():
+    from installer import operations, paths
+
+    # If KaproVPN isn't actually installed at the per-user path (the CI
+    # case, and most dev machines), stop_running_app must return cleanly
+    # without raising or shelling out to taskkill.
+    if paths.installed_exe_path().exists():
+        return  # real install present — skip rather than touch it
+    operations.stop_running_app()
+
+
+def _uninstall_cleanup_leaves_real_proxy_alone():
+    # The safety-critical invariant: the uninstall network-cleanup must
+    # NEVER disable a real (non-loopback) system proxy — only our own dead
+    # local-port entry. Patch the real module so we don't touch the
+    # machine's actual proxy settings during the test.
+    from installer import operations
+    try:
+        from kapro_vpn.core import system_proxy
+    except Exception:
+        return  # module not importable here — nothing to assert
+    orig_get, orig_dis = system_proxy.get_state, system_proxy.disable_proxy
+    calls = {"n": 0}
+    system_proxy.get_state = lambda: {"enable": 1, "server": "proxy.corp.example:8080"}
+    system_proxy.disable_proxy = lambda: calls.__setitem__("n", calls["n"] + 1)
+    try:
+        operations._clear_our_system_proxy()
+        if calls["n"] != 0:
+            raise AssertionError(
+                "uninstall cleanup disabled a non-loopback proxy — it must "
+                "only clear our own 127.0.0.1:<port> entry"
+            )
+    finally:
+        system_proxy.get_state, system_proxy.disable_proxy = orig_get, orig_dis
+
+
+check("installer: exe-lock probe handles missing + unlocked files",
+      _exe_lock_probe_handles_missing_and_unlocked)
+check("installer: stop_running_app no-ops when app not installed",
+      _stop_running_app_noops_when_not_installed)
+check("installer: uninstall cleanup never touches a real system proxy",
+      _uninstall_cleanup_leaves_real_proxy_alone)
+
+
 # ---------------------------------------------------------------------------
 # Test 7 — StatsPage live block (v1.15.2)
 # ---------------------------------------------------------------------------

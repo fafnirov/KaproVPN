@@ -200,6 +200,10 @@ def _run_app() -> int:
     # the same code path the tray icon uses.
     guard.setParent(window)  # keep the guard alive for the window's lifetime
     guard.show_requested.connect(window._on_show_window)
+    # The installer pings this before a reinstall/uninstall so we shut down
+    # cleanly (disconnect → restore system proxy + firewall) and release our
+    # exe lock, instead of being force-killed mid-session.
+    guard.quit_requested.connect(window._on_quit_for_real)
 
     def reveal() -> None:
         if not start_minimized:

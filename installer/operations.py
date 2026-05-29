@@ -8,7 +8,9 @@ from __future__ import annotations
 import ctypes
 import os
 import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -21,6 +23,171 @@ ProgressCb = Optional[Callable[[str, int], None]]  # (status_text, percent 0-100
 
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\KaproVPN"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+# --- stop the running app before touching its files ----------------------
+#
+# Windows refuses to overwrite or delete a *running* executable — the open
+# handle makes it un-writable and un-deletable (PermissionError [Errno 13] /
+# ERROR_SHARING_VIOLATION). Reinstall (overwrite KaproVPN.exe) and uninstall
+# (delete it) must therefore ensure no KaproVPN.exe is running first.
+
+def _exe_is_locked(path: Path) -> bool:
+    """True if `path` exists but can't be opened for writing.
+
+    A running .exe denies write-sharing on Windows, so opening it in append
+    mode raises. Append (not truncate) + immediate close leaves the file
+    byte-for-byte unchanged, so this is a safe, non-destructive probe.
+    """
+    if not path.exists():
+        return False
+    try:
+        with open(path, "ab"):
+            return False
+    except OSError:
+        return True
+
+
+def _wait_until_unlocked(path: Path, timeout: float) -> bool:
+    """Poll until `path` is writable again, or `timeout` seconds elapse."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _exe_is_locked(path):
+            return True
+        time.sleep(0.25)
+    return not _exe_is_locked(path)
+
+
+def _request_graceful_quit() -> None:
+    """Best-effort: ask a running KaproVPN to quit cleanly via its
+    single-instance pipe, so it disconnects (restoring the system proxy +
+    firewall rules) before we touch its files.
+
+    No-op if nothing is listening, or if the running version predates
+    CMD_QUIT support (it'll just ignore the message) — the caller falls
+    back to a force-kill in that case.
+    """
+    try:
+        from PySide6.QtNetwork import QLocalSocket
+
+        from kapro_vpn.gui.singleton import CMD_QUIT, SERVER_NAME
+    except Exception:
+        return
+    try:
+        sock = QLocalSocket()
+        sock.connectToServer(SERVER_NAME)
+        if sock.waitForConnected(700):
+            sock.write(CMD_QUIT)
+            sock.flush()
+            sock.waitForBytesWritten(700)
+            sock.disconnectFromServer()
+    except Exception:
+        pass
+
+
+def _taskkill_force(image: str) -> None:
+    """taskkill /F /T the named image (and its child xray/tun2socks/hysteria)."""
+    if sys.platform != "win32":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/IM", image],
+            capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def stop_running_app(progress: ProgressCb = None) -> None:
+    """Make sure no running KaproVPN.exe holds a lock on the install dir.
+
+    Escalates politely:
+      1. If the exe isn't even locked, return immediately (fresh install,
+         or the app is already closed).
+      2. Ask the app to quit cleanly via its pipe, wait a few seconds.
+      3. Still locked? Force-kill it (and its helper children), wait again.
+      4. Still locked? Raise a clear, actionable error rather than letting
+         the caller hit a cryptic PermissionError mid-write.
+    """
+    exe = paths.installed_exe_path()
+    if not _exe_is_locked(exe):
+        return
+
+    if progress:
+        progress("Закрываю запущенный KaproVPN…", 2)
+    _request_graceful_quit()
+    if _wait_until_unlocked(exe, timeout=6.0):
+        return
+
+    if progress:
+        progress("Завершаю процесс KaproVPN…", 3)
+    _taskkill_force(paths.APP_EXE_NAME)
+    if _wait_until_unlocked(exe, timeout=6.0):
+        return
+
+    raise RuntimeError(
+        "KaproVPN запущен и не закрывается автоматически.\n\n"
+        "Закрой его вручную (правый клик по иконке в трее → «Выход») "
+        "и запусти установщик заново."
+    )
+
+
+def _cleanup_network_state() -> None:
+    """Undo network changes a force-killed app couldn't restore itself.
+
+    Only runs as a safety net for the force-kill path of uninstall — when
+    the app quits cleanly via the pipe it restores these itself. Everything
+    here is best-effort and conservative: we only clear a system proxy that
+    points at *our own* local port (never a real corporate/personal one),
+    and only remove firewall rules we know are ours.
+
+    Without this, uninstalling while connected in HTTP-proxy mode (or with
+    the kill-switch armed) would leave the machine with no internet and no
+    app left to heal it on next launch.
+    """
+    _clear_our_system_proxy()
+    for mod_name in ("killswitch", "ipv6_block", "webrtc_block"):
+        try:
+            mod = __import__(f"kapro_vpn.core.{mod_name}", fromlist=[mod_name])
+            if mod.is_active():
+                mod.remove()
+        except Exception:
+            pass
+
+
+def _clear_our_system_proxy() -> None:
+    try:
+        from kapro_vpn.core import system_proxy
+    except Exception:
+        return
+    try:
+        state = system_proxy.get_state()
+    except Exception:
+        return
+    if not state or not state.get("enable"):
+        return
+    host, _, port_s = str(state.get("server", "")).rpartition(":")
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return  # a real proxy, not ours — leave it alone
+    listen_port = 2080
+    try:
+        from kapro_vpn.core import storage
+        listen_port = int(storage.load_settings().get("listen_port", 2080))
+    except Exception:
+        pass
+    try:
+        if int(port_s) != listen_port:
+            return
+    except ValueError:
+        return
+    # Points at our local port, and we just killed everything listening
+    # there — it's dead. Clear it so the user keeps their internet.
+    try:
+        system_proxy.disable_proxy()
+    except Exception:
+        pass
 
 
 # --- file operations ------------------------------------------------------
@@ -56,6 +223,12 @@ def _download_main_exe(version: str, target: Path,
     url = paths.github_release_exe_url(version)
     if progress:
         progress(f"Скачиваю KaproVPN.exe v{version}…", 5)
+    # Download to a sibling temp file, then os.replace() it into place
+    # atomically. Two reasons: (a) a failed/interrupted download never
+    # leaves a half-written KaproVPN.exe behind, and (b) if the target is
+    # still locked (app didn't fully exit), the swap fails cleanly with a
+    # clear message instead of corrupting the installed binary.
+    tmp = target.with_name(target.name + ".download")
     try:
         # Bypass system proxy — installer runs on a fresh machine where
         # there shouldn't be one, but if a previous KaproVPN crashed and
@@ -67,7 +240,7 @@ def _download_main_exe(version: str, target: Path,
             total = int(r.headers.get("Content-Length", 0))
             downloaded = 0
             last_pct = 5
-            with open(target, "wb") as f:
+            with open(tmp, "wb") as f:
                 for chunk in r.iter_content(chunk_size=64 * 1024):
                     if not chunk:
                         continue
@@ -87,13 +260,31 @@ def _download_main_exe(version: str, target: Path,
                         pct,
                     )
     except requests.RequestException as e:
+        _silent_unlink(tmp)
         raise RuntimeError(
             f"Не удалось скачать KaproVPN.exe с GitHub:\n{e}\n\n"
             "Проверь интернет и доступ к github.com."
         ) from e
+
+    try:
+        os.replace(tmp, target)
+    except OSError as e:
+        _silent_unlink(tmp)
+        raise RuntimeError(
+            f"Не удалось записать KaproVPN.exe — файл занят:\n{e}\n\n"
+            "Закрой KaproVPN (правый клик по иконке в трее → «Выход») "
+            "и запусти установщик заново."
+        ) from e
     if progress:
         progress(f"Скачано {target.stat().st_size // (1024 * 1024)} МБ", 50)
     return target
+
+
+def _silent_unlink(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def copy_uninstaller() -> Path:
@@ -212,6 +403,16 @@ def unregister_uninstaller() -> None:
 
 def uninstall_everything(progress: ProgressCb = None) -> None:
     """Tear down everything install_everything put in place."""
+    # The app holds a lock on its own exe while running, so deleting it
+    # would silently fail (the unlink below swallows OSError) and leave a
+    # half-removed install. Stop it first — gracefully if possible, so it
+    # restores the system proxy / firewall on the way out.
+    stop_running_app(progress)
+    # Safety net for the force-kill path: if the app couldn't restore the
+    # system proxy / firewall itself, undo our own entries so the machine
+    # keeps its internet after the app is gone.
+    _cleanup_network_state()
+
     if progress:
         progress("Удаляю ярлыки…", 10)
     for lnk in (
@@ -290,6 +491,11 @@ def _schedule_delete_on_reboot(path: Path) -> None:
 
 def install_everything(version: str, progress: ProgressCb = None,
                        create_desktop: bool = True) -> None:
+    # A reinstall overwrites KaproVPN.exe in place — if the app is still
+    # running, Windows holds the file lock and the write fails with
+    # PermissionError. Stop it first (no-op on a fresh install).
+    stop_running_app(progress)
+
     if progress:
         progress("Создаю папку установки…", 5)
     paths.install_dir().mkdir(parents=True, exist_ok=True)

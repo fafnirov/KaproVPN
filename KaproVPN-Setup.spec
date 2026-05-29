@@ -36,7 +36,19 @@ a = Analysis(
 
         *installer_pngs,
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        # Reached only via lazy imports in installer/operations.py, so
+        # PyInstaller's static analysis can't see them: the graceful-quit
+        # pipe (QtNetwork + singleton) and the uninstall network-cleanup
+        # safety net (system proxy + firewall-rule modules).
+        'PySide6.QtNetwork',
+        'kapro_vpn.gui.singleton',
+        'kapro_vpn.core.system_proxy',
+        'kapro_vpn.core.storage',
+        'kapro_vpn.core.killswitch',
+        'kapro_vpn.core.ipv6_block',
+        'kapro_vpn.core.webrtc_block',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

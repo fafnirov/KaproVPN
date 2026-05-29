@@ -26,6 +26,10 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 SERVER_NAME = "KaproVPN-singleton"
 
 CMD_SHOW = b"show\n"
+# Ask the primary instance to quit cleanly. Sent by the installer before a
+# reinstall/uninstall so the app disconnects (restoring the system proxy +
+# firewall rules) and releases its exe lock, instead of being force-killed.
+CMD_QUIT = b"quit\n"
 
 # Short timeouts — if the primary isn't responsive within 500 ms, we
 # assume it's gone (orphaned pipe from a crashed previous run, etc.)
@@ -38,6 +42,7 @@ class SingleInstanceGuard(QObject):
     """One per process. Call acquire() before showing the main window."""
 
     show_requested = Signal()  # fires when a second instance pinged us
+    quit_requested = Signal()  # fires when the installer asks us to quit
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -97,5 +102,9 @@ class SingleInstanceGuard(QObject):
 
     def _on_data(self, sock: QLocalSocket) -> None:
         data = bytes(sock.readAll())
-        if CMD_SHOW.strip() in data:
+        # Quit takes precedence: if an installer is asking us to step
+        # aside, there's no point also raising the window.
+        if CMD_QUIT.strip() in data:
+            self.quit_requested.emit()
+        elif CMD_SHOW.strip() in data:
             self.show_requested.emit()
