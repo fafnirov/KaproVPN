@@ -66,8 +66,13 @@ WINTUN_FILE="wintun-${WINTUN_VERSION}.zip"
 fetch() {
     local url="$1" dest="$2"
     echo "  [fetch] $url"
-    if ! curl -fsSL --retry 3 --retry-delay 5 -o "$dest" "$url"; then
+    # --connect-timeout/--max-time are essential: without them a host that
+    # accepts the connection but never responds (e.g. wintun.net flaky from
+    # RU) hangs curl — and the whole sync — forever.
+    if ! curl -fsSL --connect-timeout 15 --max-time 600 --retry 3 --retry-delay 5 \
+              -o "$dest" "$url"; then
         echo "  [FAIL]  $url" >&2
+        rm -f "$dest"          # don't leave a half-written file to promote
         return 1
     fi
     # Sanity: must be at least 100 KB (smallest tun2socks ~1 MB)
@@ -81,13 +86,13 @@ fetch() {
 echo "=== Xray-core $XRAY_VERSION ==="
 for asset in "${XRAY_ASSETS[@]}"; do
     fetch "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/${asset}" \
-          "$TMP_DIR/$asset"
+          "$TMP_DIR/$asset" || echo "  [skip] $asset"
 done
 
 echo "=== xjasonlyu/tun2socks $TUN2SOCKS_VERSION ==="
 for asset in "${TUN2SOCKS_ASSETS[@]}"; do
     fetch "https://github.com/xjasonlyu/tun2socks/releases/download/${TUN2SOCKS_VERSION}/${asset}" \
-          "$TMP_DIR/$asset"
+          "$TMP_DIR/$asset" || echo "  [skip] $asset"
 done
 
 echo "=== apernet/hysteria $HYSTERIA_VERSION ==="
@@ -95,11 +100,11 @@ echo "=== apernet/hysteria $HYSTERIA_VERSION ==="
 # .../releases/download/app/vX.Y.Z/<asset>. Assets are single binaries.
 for asset in "${HYSTERIA_ASSETS[@]}"; do
     fetch "https://github.com/apernet/hysteria/releases/download/app/${HYSTERIA_VERSION}/${asset}" \
-          "$TMP_DIR/$asset"
+          "$TMP_DIR/$asset" || echo "  [skip] $asset"
 done
 
 echo "=== wintun.net $WINTUN_VERSION ==="
-fetch "https://www.wintun.net/builds/${WINTUN_FILE}" "$TMP_DIR/$WINTUN_FILE"
+fetch "https://www.wintun.net/builds/${WINTUN_FILE}" "$TMP_DIR/$WINTUN_FILE" || echo "  [skip] $WINTUN_FILE (wintun.net unreachable — Windows TUN users fall back to wintun.net directly)"
 
 echo "=== KaproVPN release installer (latest) ==="
 # Mirror the latest Windows installer so the in-app auto-updater can fall
