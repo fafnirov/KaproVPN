@@ -6,83 +6,42 @@ The GitHub Actions release workflow reads the top entry for the body
 of each release on the Releases page — so what you see here is what
 users see when they click the release tag.
 
-Android и Desktop версии нумеруются отдельно — это разные кодовые базы,
-синхронизировано только содержимое `kapro_vpn/data/default_sites.json`
-(один источник правды для split-routing).
-
----
-
-# Android
-
-## v0.1.0 — первый публичный Android-клиент (26 мая 2026)
-
-Первый Android-релиз KaproVPN. Нативный Kotlin+Compose поверх Xray-core
-(через libv2ray) + системного VpnService + hev-socks5-tunnel как
-tun2socks-моста. ~30 итераций после Phase 1; этот тег фиксирует то, что
-готово к раздаче знакомым и в Telegram.
-
-**Подключение и протоколы:**
-
-- 🌐 VLESS (включая REALITY), VMess, Trojan, Shadowsocks (SIP002 +
-  legacy), Hysteria2 — те же share-URL что работают на десктопе.
-- 🔌 Полноценный системный VPN через VpnService — не proxy-only режим,
-  весь трафик идёт через туннель.
-- 🧭 Split-routing — 168 RU-доменов из общего `default_sites.json`
-  (банки, госуслуги, маркетплейсы) идут напрямую мимо VPN.
-- 📵 Per-app VPN — можно исключить отдельные приложения (банковские
-  клиенты блочат VPN-IP, у Telegram свой anti-DPI работает лучше).
-- 🔄 Auto-reconnect on app launch + on device boot.
-
-**DNS и приватность:**
-
-- 🛡 4 DNS-опции: System / AdGuard (ad-block, ~10k доменов в blackhole) /
-  Cloudflare / Quad9 — каждая со своими DoH-серверами.
-- 🚫 DNS-leak hardening — публичные резолверы и UDP/TCP port 53
-  forced-direct, `log.access: none`.
-- 🔒 `configs.json` шифруется AES-256-GCM через Android Keystore.
-  Старые plain-конфиги мигрируются прозрачно.
-
-**Серверы:**
-
-- 📥 Импорт подписки (plain / base64 / URL-safe base64) + автообновление
-  через WorkManager раз в 12 часов.
-- 📷 **QR-сканер** для добавления share-URL — CameraX + ML Kit bundled
-  (без Google Play Services). Включая работу на устройствах без GMS
-  (Huawei, прошивки, AOSP).
-- 📤 **QR-share + Copy + Send-sheet** — на каждом сервере. Закрывает
-  цикл «телефон-в-телефон» с QR-сканером.
-- ✏️ **In-place edit** конфига (rename + URL update) с сохранением
-  active-флага и ping-кэша.
-- 🏓 Per-config latency-ping с colour-coded badge.
-
-**Системная интеграция:**
-
-- 🔔 Foreground notification с live-state и кнопкой «Отключить».
-- ⚡ Quick Settings tile — один тап toggle'ит VPN.
-- 🛡 Always-on VPN compatible — поднимается с null-intent,
-  graceful onRevoke().
-- 📊 Live traffic stats на главном экране — ↓↑ totals за сессию +
-  текущая скорость, опрос libv2ray `queryStats` раз в секунду.
-
-**Локализация и качество:**
-
-- 🇷🇺🇬🇧 i18n RU/EN — переключается по системной локали.
-- ✅ 36 юнит-тестов на парсер, конфиг-билдер и подписки.
-- 📦 Release pipeline: R8 + ABI splits (arm64/armv7/x86_64/x86 +
-  universal). Каждый ABI-APK ~40-44 МБ — лезет в Telegram (50 МБ лимит).
-- 🧱 **16 KB ELF page alignment** во всех нативных .so — приложение
-  работает нативно на Pixel 8+ и Android 15+ без compatibility-mode.
-
-**Что НЕ работает:**
-
-- WireGuard не поддерживается (вырезан из десктопа в v1.4.0, не
-  переносим — для WG используй официальный клиент).
-- iOS — отложено пока нет Apple Developer аккаунта ($99/год, без
-  него VPN-extension не подписать).
+Этот файл документирует только десктопную версию (Python + PySide6,
+Windows). Android-клиент живёт в отдельном репозитории
+[fafnirov/KaproVPN-Android](https://github.com/fafnirov/KaproVPN-Android)
+со своей историей релизов и [CHANGELOG.md](https://github.com/fafnirov/KaproVPN-Android/blob/main/CHANGELOG.md).
+До 29 мая 2026 Android жил в `android/` подпапке этого репо, история тех
+коммитов перенесена в новый репо через `git filter-repo`.
 
 ---
 
 # Desktop (Windows + Python)
+
+## v1.19.1 — Фикс: тормоза DNS в TUN-режиме (сайты залипали на ~11с)
+
+В TUN-режиме каждый новый домен мог залипать на **~11 секунд** перед
+загрузкой — на части сетей (замечено на MTS RU) интернет «через VPN»
+казался сломанным, хотя в HTTP-режиме всё летало.
+
+**Причина:** xray резолвил домены через **DoH** (`https://1.1.1.1/dns-query`)
+внутри туннеля — установка TLS-сессии к DoH-эндпоинту через туннель на
+этих сетях зависает (`context deadline exceeded` в логе xray). Плюс
+правило перехвата `:53 → dns-out` ловило **сам** запрос резолвера и гоняло
+его по петле.
+
+**Фикс:**
+- DNS-резолвер теперь использует **обычные IP по UDP/53** выбранного
+  сервиса (AdGuard `94.140.14.14`, Cloudflare `1.1.1.1`, Quad9 `9.9.9.9`)
+  вместо DoH-эндпоинта. Маленький UDP-запрос через туннель отвечает за
+  ~0.4с. Приватность не меняется (запрос всё так же **внутри** VPN), а
+  AdGuard по-прежнему режет рекламу.
+- Запросы к самому резолверу пускаются напрямую в туннель, минуя
+  `dns-out`-петлю.
+
+Результат: новые сайты в TUN открываются за ~0.4с вместо ~11с (проверено
+реальным xray на свежих доменах). На совсем нестабильном канале возможны
+редкие задержки из-за потери UDP — тогда помогает HTTP-режим или
+отключение «Защиты от DNS-утечек».
 
 ## v1.19.0 — Блокировка рекламы + российские сайты напрямую по гео
 

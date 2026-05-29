@@ -214,10 +214,11 @@ def _make_dns_check(opt_key: str):
         )
         json.dumps(full, ensure_ascii=False)  # must remain serialisable
 
-        # DNS block in xray config: present only when the option has
-        # its own DoH servers (system has none — falls back to a
-        # Cloudflare hijack upstream but no top-level dns block).
-        if opt.doh_servers:
+        # DNS block in xray config: present only when the option has its
+        # own servers (system has none). v1.19.1: resolve via the option's
+        # PLAIN IPs, NOT its DoH endpoint — DoH-over-tunnel stalls ~11s on
+        # some networks; plain UDP/53 over the tunnel returns in ~0.4s.
+        if opt.plain_servers:
             if "dns" not in full:
                 raise AssertionError(f"{opt_key}: dns block missing")
             if full["dns"].get("queryStrategy") != "UseIPv4":
@@ -225,10 +226,15 @@ def _make_dns_check(opt_key: str):
                     f"{opt_key}: queryStrategy must be UseIPv4"
                 )
             servers = full["dns"].get("servers", [])
-            if servers != opt.doh_servers:
+            if servers != opt.plain_servers:
                 raise AssertionError(
-                    f"{opt_key}: dns servers mismatch — got {servers}, "
-                    f"expected {opt.doh_servers}"
+                    f"{opt_key}: dns servers should be PLAIN IPs "
+                    f"{opt.plain_servers}, got {servers}"
+                )
+            if any(str(s).startswith("https://") for s in servers):
+                raise AssertionError(
+                    f"{opt_key}: dns block must NOT use DoH URLs — they "
+                    f"stall over the tunnel (v1.19.1 regression guard)"
                 )
 
         # With dns_leak_protection=True, ALL :53 (TCP + UDP) must be
@@ -250,6 +256,26 @@ def _make_dns_check(opt_key: str):
             raise AssertionError(
                 f"{opt_key}: hijack rule should cover BOTH tcp and udp "
                 f":53; got network={hijack_rule.get('network')!r}"
+            )
+
+        # v1.19.1: the upstream-resolver carve-out (resolver IPs :53 →
+        # proxy) MUST precede the generic :53 → dns-out hijack. Without it
+        # both the resolver's own query and dns-out's forwarded query loop
+        # back through dns-out and stall ~11s on every new domain.
+        rules = full["routing"]["rules"]
+        hijack_idx = next(
+            i for i, r in enumerate(rules)
+            if r.get("outboundTag") == "dns-out" and r.get("port") == "53"
+        )
+        carve_idx = next(
+            (i for i, r in enumerate(rules)
+             if r.get("outboundTag") == "proxy" and r.get("port") == "53"),
+            None,
+        )
+        if carve_idx is None or carve_idx >= hijack_idx:
+            raise AssertionError(
+                f"{opt_key}: resolver :53 → proxy carve-out must come BEFORE "
+                f"the dns-out hijack (breaks the loop that stalled DNS)"
             )
 
         # dns-out outbound must exist with protocol=dns and a sensible

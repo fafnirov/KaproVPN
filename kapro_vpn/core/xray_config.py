@@ -376,11 +376,26 @@ def build_config(
     # toggle, NOT by which DNS option is selected. The two axes are
     # independent — see build_config docstring above.
     if dns_leak_protection:
-        # Hijack ALL :53 traffic to dns-out, which re-resolves through
-        # plain upstream and routes transport via proxy (VPN tunnel).
-        # ISP sees encrypted VPN bytes, not domain queries. This MUST
-        # come before any IP-based rules — those would steal the query
-        # before it reaches the hijack.
+        # v1.19.1 — break the dns-out loop. The hijack below sends ALL :53
+        # traffic to the dns-out re-resolver, but dns-out ITSELF forwards
+        # the query to the upstream resolver on :53 — that forwarded packet
+        # matches the hijack again and loops, and xray's own domainStrategy
+        # resolution (the `dns` block) gets the same detour. On some networks
+        # (observed on MTS RU) both stall ~11-19s, so every new domain hung.
+        # Carve out queries TO the upstream resolver: route them straight
+        # through the tunnel (proxy) so they resolve directly — small UDP/53
+        # over the tunnel returns in ~0.4s. App DNS to any OTHER address
+        # still gets the leak-protection hijack below.
+        upstream_ips = list(dns_opt.plain_servers) or list(_LEAK_PROTECTION_FALLBACK)
+        rules.append({
+            "type": "field",
+            "ip": [f"{ip}/32" for ip in upstream_ips],
+            "port": "53",
+            "outboundTag": "proxy",
+        })
+        # Hijack the REST of :53 traffic to dns-out, which re-resolves
+        # through the upstream and routes transport via proxy (VPN tunnel).
+        # ISP sees encrypted VPN bytes, not domain queries.
         rules.append({
             "type": "field",
             "outboundTag": "dns-out",
@@ -462,13 +477,23 @@ def build_config(
     from . import xray_stats as _stats
 
     # DNS block — only when the user picked a named service. For "system"
-    # we leave xray's default behavior (resolve via the OS), so this block
-    # is omitted entirely. For DoH options, point xray at the encrypted
-    # endpoint and force IPv4-only queries (we don't tunnel v6 anyway).
+    # we leave xray's default behavior (resolve via the OS).
+    #
+    # v1.19.1: use the resolver's PLAIN IPs, not its DoH endpoint. xray
+    # resolves every domain here (domainStrategy=IPIfNonMatch) to match the
+    # geoip routing rules, and these queries ride the proxy outbound (the
+    # VPN tunnel). A DoH endpoint means opening a fresh TLS connection to
+    # 1.1.1.1:443 *through the tunnel* for resolution — on some networks
+    # (observed on MTS RU) that TLS-in-tunnel setup stalls ~11s and times
+    # out ("context deadline exceeded" in xray's log), so every new domain
+    # hung. A plain UDP/53 query through the same tunnel returns in ~0.4s.
+    # Privacy is unchanged from the user's ISP — the query is still inside
+    # the encrypted tunnel; we only drop the (server-side) DoH leg. AdGuard's
+    # plain IPs still filter ads, so the ad-block option keeps working.
     dns_block: dict[str, Any] | None = None
-    if dns_opt.doh_servers:
+    if dns_opt.plain_servers:
         dns_block = {
-            "servers": list(dns_opt.doh_servers),
+            "servers": list(dns_opt.plain_servers),
             "queryStrategy": "UseIPv4",
         }
 
