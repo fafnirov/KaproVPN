@@ -33,8 +33,9 @@ from PySide6.QtWidgets import (
 from ..core import storage
 from ..core.parser import ProxyConfig
 from ..core.subscription import (
+    FetchError,
     SubscriptionResult,
-    _looks_like_dpi_block,
+    classify_fetch_error,
     import_with_dpi_fallback,
     result_from_body,
 )
@@ -42,7 +43,7 @@ from ..core.subscription import (
 
 class _SubscriptionFetcher(QThread):
     succeeded = Signal(object)  # SubscriptionResult
-    failed = Signal(str, bool)  # (message, looks_like_dpi_block)
+    failed = Signal(object)  # FetchError (classified cause)
 
     def __init__(self, url: str, listen_port: int, parent=None):
         super().__init__(parent)
@@ -59,7 +60,9 @@ class _SubscriptionFetcher(QThread):
             )
             self.succeeded.emit(result)
         except Exception as e:
-            self.failed.emit(f"{type(e).__name__}: {e}", _looks_like_dpi_block(e))
+            # Classify the failure so the dialog shows the real cause
+            # (a 404 is a dead link, not a REALITY block).
+            self.failed.emit(classify_fetch_error(e))
 
 
 class SubscriptionDialog(QDialog):
@@ -206,35 +209,20 @@ class SubscriptionDialog(QDialog):
         self.fetch_btn.setEnabled(True)
         self._show_result(result)
 
-    def _on_fetch_failed(self, msg: str, looks_like_dpi: bool) -> None:
+    def _on_fetch_failed(self, info: FetchError) -> None:
         self.fetch_btn.setEnabled(True)
-        hint = (
-            "<br><br><span style='color:#fbbf24'>"
-            "Сайт провайдера недоступен — это бывает, когда подписка "
-            "защищена REALITY или IP-белым списком. "
-            "Открой URL в браузере (Chrome/Firefox), скопируй содержимое "
-            "страницы целиком и вставь его в форму ниже."
-            "</span>"
-        )
-        if looks_like_dpi:
-            # We at least know it's TLS-shaped — the user might also try
-            # connecting first.
-            hint += (
-                "<br><span style='color:#a1a1aa'>"
-                "Альтернативно — подключись к любому сохранённому серверу, "
-                "и KaproVPN автоматически попробует ещё раз через туннель."
-                "</span>"
-            )
         self.status_label.setText(
-            f"<span style='color:#ef4444'>✕ Не удалось загрузить:</span><br>"
-            f"<span style='color:#a1a1aa; font-size:9pt'>{msg}</span>"
-            f"{hint}"
+            f"<span style='color:#ef4444'>✕ {info.title}</span><br>"
+            f"<span style='color:#fbbf24'>{info.detail}</span><br>"
+            f"<span style='color:#a1a1aa; font-size:9pt'>{info.raw}</span>"
         )
-        # Auto-open the manual-paste section so the user sees the escape hatch
-        # right where it's needed.
-        if not self.manual_toggle.isChecked():
-            self.manual_toggle.setChecked(True)
-        self.manual_edit.setFocus()
+        # Only push the manual-paste escape hatch when it could actually
+        # help (DPI / whitelist / timeout). For a 404 or server error it
+        # can't — don't send the user down a dead end.
+        if info.suggest_manual:
+            if not self.manual_toggle.isChecked():
+                self.manual_toggle.setChecked(True)
+            self.manual_edit.setFocus()
 
     def _on_manual_toggled(self, checked: bool) -> None:
         self.manual_frame.setVisible(checked)
@@ -281,8 +269,27 @@ class SubscriptionDialog(QDialog):
                     f"Пропущено {len(result.errors)} строк "
                     f"(нераспознанный формат)</span>"
                 )
+            if result.placeholders:
+                msg += (
+                    f"<br><span style='color:#a1a1aa'>"
+                    f"Пропущена заглушка от провайдера "
+                    f"({len(result.placeholders)} шт., нерабочий сервер)</span>"
+                )
             self.status_label.setText(msg)
             self.save_btn.setEnabled(True)
+        elif result.placeholders:
+            # Parsed fine, but every entry was a provider stub (e.g.
+            # gmailvpn's 0.0.0.0:1 "App not supported"). Explain instead
+            # of silently importing a dead server.
+            n = len(result.placeholders)
+            self.status_label.setText(
+                "<span style='color:#ef4444'>✕ Провайдер вернул только "
+                f"заглушку ({n}), а не рабочие серверы.</span><br>"
+                "<span style='color:#fbbf24'>Обычно это значит: подписка не "
+                "активирована / не оплачена, либо провайдер не отдаёт конфиги "
+                "стороннему клиенту (нужен их Clash / официальное приложение). "
+                "Проверь статус подписки у провайдера.</span>"
+            )
         else:
             self.status_label.setText(
                 "<span style='color:#ef4444'>✕ В ответе не найдено ни одного "

@@ -1626,6 +1626,90 @@ check("main(): startup crash -> logged + exit 1",    _main_safe_mode_wiring)
 
 
 # ---------------------------------------------------------------------------
+# Test 14 — subscription: error classification + stub detection (v1.16.14)
+# ---------------------------------------------------------------------------
+# A 404 must NOT be reported as a REALITY/DPI block, and provider stub
+# configs (host 0.0.0.0 / name "App not supported") must be filtered out
+# instead of silently imported as dead servers.
+
+section("Subscription — error classify + stub filter")
+
+from kapro_vpn.core import subscription as _sub
+
+_STUB_URL = ("vless://aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa@0.0.0.0:1"
+             "?encryption=none&type=tcp&security=none#App%20not%20supported")
+_REAL_URL = SAMPLE_URLS[0][1]  # synthetic vless sample (host 1.2.3.4:443)
+
+
+def _placeholder_detects_stub() -> None:
+    if not _sub.is_placeholder_config(parse(_STUB_URL)):
+        raise AssertionError("0.0.0.0 / 'App not supported' not flagged as placeholder")
+
+
+def _placeholder_passes_real() -> None:
+    if _sub.is_placeholder_config(parse(_REAL_URL)):
+        raise AssertionError("real server wrongly flagged as placeholder")
+
+
+def _result_filters_stub() -> None:
+    r = _sub.result_from_body(_STUB_URL)
+    if r.configs:
+        raise AssertionError(f"stub leaked into configs: {r.configs}")
+    if len(r.placeholders) != 1:
+        raise AssertionError(f"stub not recorded as placeholder: {r.placeholders}")
+
+
+def _result_keeps_real() -> None:
+    r = _sub.result_from_body(_REAL_URL)
+    if len(r.configs) != 1 or r.placeholders:
+        raise AssertionError(f"real cfg mishandled: cfgs={len(r.configs)} ph={r.placeholders}")
+
+
+def _classify_404_not_dpi() -> None:
+    import requests
+    e = requests.exceptions.HTTPError("404 Client Error: Not Found")
+    e.response = type("R", (), {"status_code": 404})()
+    info = _sub.classify_fetch_error(e)
+    if info.category != "not_found":
+        raise AssertionError(f"404 misclassified as {info.category}")
+    if info.suggest_manual:
+        raise AssertionError("404 must NOT suggest manual paste")
+
+
+def _classify_timeout() -> None:
+    import requests
+    info = _sub.classify_fetch_error(requests.exceptions.ConnectTimeout("timed out"))
+    if info.category != "timeout":
+        raise AssertionError(f"timeout misclassified as {info.category}")
+
+
+def _classify_dpi() -> None:
+    import requests
+    e = requests.exceptions.SSLError("SSLEOFError EOF (unexpected_eof_while_reading)")
+    info = _sub.classify_fetch_error(e)
+    if info.category != "dpi" or not info.suggest_manual:
+        raise AssertionError(f"DPI-shaped misclassified: {info.category}/{info.suggest_manual}")
+
+
+def _classify_conn() -> None:
+    import requests
+    e = requests.exceptions.ConnectionError("getaddrinfo failed [Errno 11001]")
+    info = _sub.classify_fetch_error(e)
+    if info.category != "conn":
+        raise AssertionError(f"generic conn misclassified as {info.category}")
+
+
+check("placeholder: 0.0.0.0 stub detected",     _placeholder_detects_stub)
+check("placeholder: real server passes",        _placeholder_passes_real)
+check("result_from_body: stub -> placeholders", _result_filters_stub)
+check("result_from_body: real -> configs",      _result_keeps_real)
+check("classify: 404 = not_found, no manual",   _classify_404_not_dpi)
+check("classify: timeout",                      _classify_timeout)
+check("classify: DPI-shaped -> dpi",            _classify_dpi)
+check("classify: generic conn -> conn",         _classify_conn)
+
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 

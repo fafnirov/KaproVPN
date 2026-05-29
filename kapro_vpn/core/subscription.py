@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import base64
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import requests
@@ -51,6 +51,114 @@ class SubscriptionResult:
     errors: list[str]
     raw_lines: int  # how many candidate lines we tried to parse
     via_proxy: bool = False  # did we fall back to the local xray tunnel?
+    # Names of configs that parsed fine but are provider "stubs" (e.g.
+    # gmailvpn's `vless://…@0.0.0.0:1 #App not supported`) — filtered out
+    # of `configs` so a dead placeholder is never imported as a server.
+    placeholders: list[str] = field(default_factory=list)
+
+
+@dataclass
+class FetchError:
+    """Structured classification of a subscription-fetch failure, so the
+    UI can show an accurate cause instead of always blaming REALITY/DPI."""
+    category: str        # not_found | auth | server | timeout | dpi | conn | unknown
+    raw: str             # technical "TypeName: message" for the details line
+    title: str           # short human-readable cause
+    detail: str          # what the user should do
+    suggest_manual: bool  # whether browser-copy-paste could plausibly help
+
+
+# Hosts that mean "this isn't a real server" — providers hand these out as
+# placeholders instead of a 404 when they won't serve a given client/plan.
+PLACEHOLDER_HOSTS = {"", "0", "0.0.0.0", "127.0.0.1", "::", "::1", "localhost"}
+
+
+def is_placeholder_config(cfg: ProxyConfig) -> bool:
+    """True if a parsed config is a provider stub rather than a usable server.
+
+    Catches the gmailvpn-style `vless://…@0.0.0.0:1 #App not supported`
+    dummy: importing it would give the user a dead server with no hint why.
+    """
+    host = str(cfg.outbound.get("server", "")).strip().lower()
+    if host in PLACEHOLDER_HOSTS:
+        return True
+    name = (cfg.name or "").lower()
+    if "not supported" in name or "unsupported" in name:
+        return True
+    port = cfg.outbound.get("server_port", cfg.outbound.get("port"))
+    try:
+        if port is not None and int(port) <= 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def classify_fetch_error(exc: Exception) -> FetchError:
+    """Map a fetch exception to an accurate, actionable message.
+
+    The big win over the old "always REALITY/whitelist" hint: an HTTP
+    status error means the server *answered* — it's not a TLS/DPI block,
+    and manual browser-paste won't conjure a subscription that 404s.
+    """
+    raw = f"{type(exc).__name__}: {exc}"
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", None) if resp is not None else None
+    if status is not None:
+        if status in (404, 410):
+            return FetchError(
+                "not_found", raw,
+                f"Подписка не найдена (HTTP {status}).",
+                "Ссылка неверная или устарела — ручная вставка не поможет. "
+                "Запроси у провайдера актуальную ссылку.",
+                suggest_manual=False,
+            )
+        if status in (401, 403):
+            return FetchError(
+                "auth", raw,
+                f"Доступ запрещён (HTTP {status}).",
+                "Подписка не активна / требует авторизации, либо доступ "
+                "ограничен по IP. Если URL открывается в браузере — "
+                "скопируй ответ и вставь вручную.",
+                suggest_manual=True,
+            )
+        return FetchError(
+            "server", raw,
+            f"Сервер провайдера ответил ошибкой (HTTP {status}).",
+            "Это на стороне провайдера. Попробуй позже или запроси новую ссылку.",
+            suggest_manual=False,
+        )
+    if _looks_like_dpi_block(exc):
+        return FetchError(
+            "dpi", raw,
+            "Похоже на DPI-блокировку или REALITY / IP-белый список.",
+            "Открой URL в браузере, скопируй ответ целиком и вставь вручную. "
+            "Или подключись к любому серверу — KaproVPN попробует ещё раз "
+            "через туннель.",
+            suggest_manual=True,
+        )
+    if isinstance(exc, requests.exceptions.Timeout):
+        return FetchError(
+            "timeout", raw,
+            "Таймаут — сервер не ответил.",
+            "Проверь интернет и ссылку. Если сайт открывается в браузере — "
+            "вставь ответ вручную.",
+            suggest_manual=True,
+        )
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return FetchError(
+            "conn", raw,
+            "Не удалось соединиться с сервером провайдера.",
+            "Проверь ссылку и интернет. Если URL открывается в браузере — "
+            "вставь ответ вручную.",
+            suggest_manual=True,
+        )
+    return FetchError(
+        "unknown", raw,
+        "Не удалось загрузить подписку.",
+        "Если URL открывается в браузере — скопируй ответ и вставь вручную.",
+        suggest_manual=True,
+    )
 
 
 def parse_subscription_body(body: str) -> list[str]:
@@ -145,15 +253,21 @@ def result_from_body(body: str, via_proxy: bool = False) -> SubscriptionResult:
     share_urls = parse_subscription_body(body)
     configs: list[ProxyConfig] = []
     errors: list[str] = []
+    placeholders: list[str] = []
     for share_url in share_urls:
         try:
-            configs.append(parse(share_url))
+            cfg = parse(share_url)
         except ParseError as e:
             short = share_url[:60] + ("…" if len(share_url) > 60 else "")
             errors.append(f"{short} — {e}")
+            continue
+        if is_placeholder_config(cfg):
+            placeholders.append(cfg.name or share_url[:40])
+        else:
+            configs.append(cfg)
     return SubscriptionResult(
         configs=configs, errors=errors, raw_lines=len(share_urls),
-        via_proxy=via_proxy,
+        via_proxy=via_proxy, placeholders=placeholders,
     )
 
 
