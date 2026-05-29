@@ -17,7 +17,11 @@
 
 set -euo pipefail
 
-MIRROR_DIR="/var/www/files.kaprovpn.pro"
+# Path-based mirror: files are served from the existing kaprovpn.pro
+# nginx under /files/ (no separate subdomain / DNS). This dir must match
+# the `location /files/` root in the site's server block — see
+# nginx.conf.example. Adjust if your kaprovpn.pro docroot differs.
+MIRROR_DIR="/var/www/kaprovpn.pro/files"
 TMP_DIR="$(mktemp -d -t kaprovpn-sync-XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 

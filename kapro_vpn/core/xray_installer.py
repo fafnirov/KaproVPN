@@ -38,7 +38,7 @@ PINNED_VERSION = "v26.3.27"
 # CDN-redirect, often less blocked in RU than github.com), and lets
 # us keep working when GitHub itself has a bad day. Falls back to
 # upstream GitHub URL on any failure (404/timeout/etc).
-KAPROVPN_MIRROR_BASE = "https://files.kaprovpn.pro"
+KAPROVPN_MIRROR_BASE = "https://kaprovpn.pro/files"
 
 # Bypass system proxy — we're fetching our own deps, not user traffic.
 # Without this, a stale 127.0.0.1:2080 system proxy (left over from a

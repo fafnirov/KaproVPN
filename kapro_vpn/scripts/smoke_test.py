@@ -1854,7 +1854,7 @@ def _updater_sources_order() -> None:
     srcs = _setup_sources("1.2.3")
     if len(srcs) != 2:
         raise AssertionError(f"expected 2 sources, got {srcs}")
-    if "files.kaprovpn.pro" not in srcs[0]:
+    if "kaprovpn.pro/files" not in srcs[0]:
         raise AssertionError(f"mirror must be first: {srcs}")
     if "github.com" not in srcs[1]:
         raise AssertionError(f"github must be the fallback: {srcs}")

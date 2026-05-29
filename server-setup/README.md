@@ -16,7 +16,7 @@ broken mirror doesn't break new installs.
 ```
 client.exe (first launch)
   ├─ wants xray.exe / tun2socks.exe / wintun.dll
-  ├─ tries  https://files.kaprovpn.pro/<filename>     ← THIS server
+  ├─ tries  https://kaprovpn.pro/files/<filename>     ← THIS server
   └─ falls back to original GitHub URLs on any failure
 ```
 
@@ -46,30 +46,24 @@ Total disk usage: ~150 MB at any given time.
 Assumes Ubuntu 22.04 / Debian 12 with root SSH access. Adapt to
 your distro as needed.
 
-### 1. DNS
+### 1. No DNS / no extra cert
 
-In your domain registrar (regru, etc.) add an A record for
-`files.kaprovpn.pro` pointing at your VPS public IP.
+The mirror is **path-based** — served from the existing `kaprovpn.pro`
+site under `/files/`. No separate subdomain, no new DNS record, no new
+TLS cert: it rides the `kaprovpn.pro` vhost certbot already manages.
 
-```
-files.kaprovpn.pro  →  A  →  <your VPS IP>
-```
+### 2. nginx — add the `/files/` location
 
-Wait ~5 minutes for propagation. Verify with:
-```bash
-dig +short files.kaprovpn.pro
-```
-
-### 2. nginx + Let's Encrypt
+Paste the `location /files/` block from `nginx.conf.example` INTO the
+existing `kaprovpn.pro` server block (the `:443` one), create the dir,
+then reload:
 
 ```bash
-apt update && apt install -y nginx certbot python3-certbot-nginx
-mkdir -p /var/www/files.kaprovpn.pro
-chown -R www-data:www-data /var/www/files.kaprovpn.pro
-cp nginx.conf.example /etc/nginx/sites-available/files.kaprovpn.pro
-ln -sf /etc/nginx/sites-available/files.kaprovpn.pro /etc/nginx/sites-enabled/
+mkdir -p /var/www/kaprovpn.pro/files
+chown -R www-data:www-data /var/www/kaprovpn.pro/files
+# edit the kaprovpn.pro vhost, paste the location block from
+# nginx.conf.example (keep `alias` == /var/www/kaprovpn.pro/files/)
 nginx -t && systemctl reload nginx
-certbot --nginx -d files.kaprovpn.pro --non-interactive --agree-tos -m you@example.com
 ```
 
 certbot rewrites the nginx site config to add the 443 server block
@@ -83,7 +77,7 @@ chmod +x /usr/local/bin/kaprovpn-sync
 /usr/local/bin/kaprovpn-sync   # first run — pulls everything
 ```
 
-The script downloads from upstream into `/var/www/files.kaprovpn.pro/`
+The script downloads from upstream into `/var/www/kaprovpn.pro/files/`
 under the exact filenames the KaproVPN client expects. Total run
 time on a 100 Mbit link: ~30 seconds.
 
@@ -105,7 +99,7 @@ of being published.
 
 From any machine:
 ```bash
-curl -sI https://files.kaprovpn.pro/Xray-windows-64.zip | head -3
+curl -sI https://kaprovpn.pro/files/Xray-windows-64.zip | head -3
 # Expect:
 #   HTTP/2 200
 #   server: nginx

@@ -101,7 +101,7 @@ Shadowsocks, Hysteria2) с одной важной фичей: домены из
 телеметрии, никакого удалённого логирования. Конфиги шифруются на
 диске на Windows. Access-log Xray явно отключён в нашем конфиге
 (никаких per-domain логов на твоём диске). Опциональный mirror
-для скачивания `files.kaprovpn.pro` хранит nginx access-логи 7 дней,
+для скачивания `kaprovpn.pro/files` хранит nginx access-логи 7 дней,
 потом удаляет; fallback на GitHub доступен всегда.
 
 Полные детали в [SECURITY.md](SECURITY.md), включая адрес для

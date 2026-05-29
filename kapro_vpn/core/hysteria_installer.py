@@ -30,7 +30,7 @@ GITHUB_LATEST = "https://api.github.com/repos/apernet/hysteria/releases/latest"
 # Pinned fallback if the live API is unreachable. Bump alongside the
 # server-setup mirror's HYSTERIA_VERSION.
 PINNED_TAG = "app/v2.9.2"
-KAPROVPN_MIRROR_BASE = "https://files.kaprovpn.pro"
+KAPROVPN_MIRROR_BASE = "https://kaprovpn.pro/files"
 # Bypass any system proxy — we're fetching our own deps, not user traffic
 # (a stale 127.0.0.1 proxy from a crashed session would otherwise break this).
 _NO_PROXY = {"http": "", "https": ""}

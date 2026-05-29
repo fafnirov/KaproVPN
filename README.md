@@ -95,7 +95,7 @@ the sites in your direct list see your real address.
 Short version: **we don't collect anything.** No analytics, no telemetry,
 no remote logging. Configs are encrypted on disk on Windows. Xray's
 access-log is explicitly disabled in our generated config (no per-domain
-log on your disk). The optional download mirror on `files.kaprovpn.pro`
+log on your disk). The optional download mirror on `kaprovpn.pro/files`
 keeps nginx access-logs for 7 days then deletes them; the GitHub
 fallback is always available.
 

@@ -41,7 +41,7 @@ SETUP_FILENAME = "KaproVPN-Setup.exe"
 # Our own mirror — reachable from RU/CIS where github.com is frequently
 # DNS-blocked / throttled. That block (getaddrinfo failed for github.com)
 # is exactly what made auto-update dead-on-arrival for those users.
-KAPROVPN_MIRROR_BASE = "https://files.kaprovpn.pro"
+KAPROVPN_MIRROR_BASE = "https://kaprovpn.pro/files"
 
 
 def _release_setup_url(version: str) -> str:

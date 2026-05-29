@@ -57,7 +57,7 @@ In normal operation:
 2. **`api.github.com/repos/fafnirov/KaproVPN/releases/latest`** — checked
    silently 2 seconds after launch, then once a day. To detect new
    versions. Returns a small JSON, no IP/User-Agent of your providers.
-3. **`files.kaprovpn.pro`** — our mirror for xray-core / tun2socks /
+3. **`kaprovpn.pro/files`** — our mirror for xray-core / tun2socks /
    WinTUN driver / geoip-CIDR list. Falls back to upstream
    (github.com/XTLS/Xray-core, wintun.net, ipdeny.com) if mirror is
    down. Downloaded once on first launch, cached forever.
@@ -69,7 +69,7 @@ That's it. No other outbound calls exist in the codebase.
 
 ### What our mirror logs
 
-`files.kaprovpn.pro` runs nginx, which records IP + User-Agent +
+`kaprovpn.pro/files` runs nginx, which records IP + User-Agent +
 filename for each request. Retention is **7 days**, rotated
 automatically, never shipped off the VPS. See
 `server-setup/nginx-log-rotation.md` for the exact config.
