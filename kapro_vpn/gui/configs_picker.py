@@ -243,13 +243,10 @@ class ConfigsPickerDialog(QDialog):
             item.setData(Qt.UserRole, cfg)
             self.list_widget.addItem(item)
             row = self._make_row(cfg)
-            # adjustSize() forces the layout to compute before we read the
-            # hint — otherwise sizeHint() under-reports and the two text
-            # lines collapse on top of each other. Floor at 56px so a 2-line
-            # row always has breathing room regardless of font scaling.
-            row.adjustSize()
-            sh = row.sizeHint()
-            item.setSizeHint(QSize(sh.width(), max(sh.height(), 56)))
+            # Use the row's own DPI-aware minimum height (set in _make_row
+            # from font metrics) — reliable across display scaling, unlike
+            # a fixed px floor.
+            item.setSizeHint(QSize(row.sizeHint().width(), row.minimumHeight()))
             self.list_widget.setItemWidget(item, row)
             if cfg.name == self._current_name:
                 self.list_widget.setCurrentItem(item)
@@ -348,6 +345,15 @@ class ConfigsPickerDialog(QDialog):
         self._style_pill(pill, self._pings.get(cfg.name, "pending"))
         bot.addWidget(pill)
         v.addLayout(bot)
+
+        # DPI-aware row height. The old fixed 56px floor clipped glyphs at
+        # 125%/150% Windows display scaling — font metrics scale with DPI,
+        # a hardcoded pixel count doesn't. Derive height from the real
+        # line heights + margins + generous slack.
+        line1 = name.fontMetrics().height()
+        line2 = max(srv.fontMetrics().height(),
+                    proto.sizeHint().height(), pill.sizeHint().height())
+        w.setMinimumHeight(6 + line1 + 3 + line2 + 6 + 16)  # +16 slack: never clip glyphs
         return w
 
     def _style_pill(self, pill: QLabel, value) -> None:
