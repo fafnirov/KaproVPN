@@ -6,7 +6,7 @@ import socket
 import time
 from typing import Optional
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QSize, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -243,7 +243,13 @@ class ConfigsPickerDialog(QDialog):
             item.setData(Qt.UserRole, cfg)
             self.list_widget.addItem(item)
             row = self._make_row(cfg)
-            item.setSizeHint(row.sizeHint())
+            # adjustSize() forces the layout to compute before we read the
+            # hint — otherwise sizeHint() under-reports and the two text
+            # lines collapse on top of each other. Floor at 56px so a 2-line
+            # row always has breathing room regardless of font scaling.
+            row.adjustSize()
+            sh = row.sizeHint()
+            item.setSizeHint(QSize(sh.width(), max(sh.height(), 56)))
             self.list_widget.setItemWidget(item, row)
             if cfg.name == self._current_name:
                 self.list_widget.setCurrentItem(item)
