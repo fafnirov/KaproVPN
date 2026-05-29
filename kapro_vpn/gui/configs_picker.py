@@ -146,6 +146,12 @@ class ConfigsPickerDialog(QDialog):
         layout.addWidget(self.search_input)
 
         self.list_widget = QListWidget()
+        # The global QListWidget::item has padding:12px — fine for plain-text
+        # items, but with our setItemWidget rows it inflates the item rect
+        # around the widget, so the selection / active highlight renders as a
+        # misaligned halo spilling onto neighbouring rows. Zero it for THIS
+        # list; the row widget's own contentsMargins give the inner spacing.
+        self.list_widget.setStyleSheet("QListWidget::item { padding: 0px; margin: 2px; }")
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
         layout.addWidget(self.list_widget, stretch=1)
 
