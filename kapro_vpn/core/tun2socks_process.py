@@ -56,6 +56,16 @@ def _device_arg() -> str:
 class Tun2socksProcess:
     """Wraps tun2socks as a subprocess."""
 
+    # Throughput tuning (v1.19.2). gVisor's userspace netstack defaults to a
+    # small, fixed TCP receive window; on a link with non-trivial latency
+    # that caps throughput well below the line rate (window < bandwidth-delay
+    # product). `-tcp-auto-tuning` lets the window grow toward the BDP, and
+    # these explicit buffers raise the ceiling for fast / high-RTT servers.
+    # 4 MiB covers ~1 Gbps at 30 ms RTT with headroom; auto-tuning only grows
+    # to what a flow needs, so idle connections don't pay it.
+    TCP_SNDBUF = "4m"
+    TCP_RCVBUF = "4m"
+
     def __init__(self, on_log: Optional[LogSink] = None, log_buffer: int = 500):
         self._proc: Optional[subprocess.Popen] = None
         self._reader: Optional[threading.Thread] = None
@@ -66,8 +76,23 @@ class Tun2socksProcess:
         # once the process starts. None until tun2socks announces it.
         self._mac_device_name: Optional[str] = None
 
+    def _build_args(self, exe, socks_addr: str, mtu: int, loglevel: str) -> list[str]:
+        """The tun2socks command line. Split out so it's unit-testable
+        without spawning a real TUN device (which needs admin)."""
+        return [
+            str(exe),
+            "-device", _device_arg(),
+            "-proxy", f"socks5://{socks_addr}",
+            "-loglevel", loglevel,
+            "-mtu", str(mtu),
+            # --- throughput tuning (v1.19.2) ---
+            "-tcp-auto-tuning",
+            "-tcp-sndbuf", self.TCP_SNDBUF,
+            "-tcp-rcvbuf", self.TCP_RCVBUF,
+        ]
+
     def start(self, socks_addr: str = "127.0.0.1:2081",
-              mtu: int = 1500, loglevel: str = "info") -> None:
+              mtu: int = 1500, loglevel: str = "warn") -> None:
         if self.is_running():
             raise RuntimeError("tun2socks is already running")
         exe = paths.tun2socks_exe()
@@ -80,13 +105,7 @@ class Tun2socksProcess:
         # cwd to its directory. On Unix cwd doesn't matter for binary
         # resolution but we keep it for log/temp file consistency.
         self._proc = subprocess.Popen(
-            [
-                str(exe),
-                "-device", _device_arg(),
-                "-proxy", f"socks5://{socks_addr}",
-                "-loglevel", loglevel,
-                "-mtu", str(mtu),
-            ],
+            self._build_args(exe, socks_addr, mtu, loglevel),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

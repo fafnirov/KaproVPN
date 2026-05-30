@@ -598,6 +598,32 @@ check("HTTP-mode connect arms IPv6-leak protection (v1.18.1)",
       _http_connect_arms_ipv6_block)
 
 
+# v1.19.2: tun2socks throughput tuning. gVisor's netstack caps the TCP
+# receive window below the link's BDP without auto-tuning, so TUN-mode
+# throughput sat under the line rate. Guard the flags against silent revert.
+def _tun2socks_args_have_throughput_tuning() -> None:
+    from kapro_vpn.core.tun2socks_process import Tun2socksProcess
+    args = Tun2socksProcess()._build_args("tun2socks.exe", "127.0.0.1:2081", 1500, "warn")
+    for flag in ("-tcp-auto-tuning", "-tcp-sndbuf", "-tcp-rcvbuf"):
+        if flag not in args:
+            raise AssertionError(
+                f"tun2socks args missing throughput flag {flag} "
+                f"(TUN throughput regression): {args}"
+            )
+    snd = args[args.index("-tcp-sndbuf") + 1]
+    rcv = args[args.index("-tcp-rcvbuf") + 1]
+    if not snd or not rcv:
+        raise AssertionError("tun2socks buffer sizes must be non-empty")
+    # base command must still be intact
+    for flag in ("-device", "-proxy", "-mtu", "-loglevel"):
+        if flag not in args:
+            raise AssertionError(f"tun2socks base arg {flag} missing: {args}")
+
+
+check("tun2socks args carry throughput tuning (auto-tuning + buffers)",
+      _tun2socks_args_have_throughput_tuning)
+
+
 # ---------------------------------------------------------------------------
 # Test 5.7 — WebRTC leak block (v1.16.0)
 # ---------------------------------------------------------------------------
