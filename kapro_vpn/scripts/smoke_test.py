@@ -2148,10 +2148,26 @@ def _hy_no_port_raises() -> None:
     raise AssertionError("hy2 without socks port should raise NotImplementedError")
 
 
+def _hy_bandwidth_config() -> None:
+    # v1.19.6: link-speed hints -> hysteria brutal CC bandwidth block.
+    ob = parse(_HY2_URL).outbound
+    # 0/0 (default) -> no bandwidth block (BBR, safe).
+    if "bandwidth" in _hyp.build_client_config(ob, 2089, up_mbps=0, down_mbps=0):
+        raise AssertionError("bandwidth must be omitted at 0/0 (BBR default)")
+    # both set -> 'N mbps' strings.
+    bw = _hyp.build_client_config(ob, 2089, up_mbps=20, down_mbps=200).get("bandwidth")
+    if bw != {"up": "20 mbps", "down": "200 mbps"}:
+        raise AssertionError(f"bandwidth wrong: {bw}")
+    # only one set -> still omitted (brutal CC needs both up AND down).
+    if "bandwidth" in _hyp.build_client_config(ob, 2089, up_mbps=0, down_mbps=200):
+        raise AssertionError("bandwidth needs BOTH up and down — omit if one is 0")
+
+
 check("hysteria: asset name per platform",   _hy_asset_name)
 check("hysteria: client config mapping",     _hy_client_config)
 check("hysteria: xray socks-chain",          _hy_xray_chain)
 check("hysteria: no port -> NotImplemented", _hy_no_port_raises)
+check("hysteria: bandwidth brutal-CC config", _hy_bandwidth_config)
 
 
 # ---------------------------------------------------------------------------

@@ -149,8 +149,12 @@ class ConnectionManager:
         except Exception as e:
             raise ConnectionError(f"Не удалось скачать hysteria-клиент: {e}") from e
         port = hysteria_process.HYSTERIA_SOCKS_PORT
+        # Optional link-speed hints → hysteria's high-throughput brutal CC.
+        up = int(self.settings.get("hysteria_up_mbps", 0) or 0)
+        down = int(self.settings.get("hysteria_down_mbps", 0) or 0)
         try:
-            cfg_path = hysteria_process.write_client_config(config.outbound, port)
+            cfg_path = hysteria_process.write_client_config(
+                config.outbound, port, up_mbps=up, down_mbps=down)
             self.hysteria_process.start(str(cfg_path))
         except Exception as e:
             raise ConnectionError(f"Не удалось запустить hysteria: {e}") from e

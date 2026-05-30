@@ -675,6 +675,49 @@ class SettingsPage(QWidget):
         ru_direct_hint.setContentsMargins(28, 0, 0, 0)
         outer.addWidget(ru_direct_hint)
 
+        # --- Hysteria2 link speed → brutal congestion control (v1.19.6) ---
+        sep_hy = QFrame()
+        sep_hy.setFrameShape(QFrame.HLine)
+        outer.addWidget(sep_hy)
+
+        hy_label = QLabel("Скорость канала (для Hysteria2)")
+        hy_label.setObjectName("h2")
+        outer.addWidget(hy_label)
+
+        hy_row = QHBoxLayout()
+        hy_row.addWidget(QLabel("Загрузка:"))
+        self.hy_down_spin = QSpinBox()
+        self.hy_down_spin.setRange(0, 10000)
+        self.hy_down_spin.setSuffix(" Мбит/с")
+        self.hy_down_spin.setValue(int(manager.settings.get("hysteria_down_mbps", 0) or 0))
+        self.hy_down_spin.valueChanged.connect(self._on_hy_down_changed)
+        hy_row.addWidget(self.hy_down_spin)
+        hy_row.addSpacing(12)
+        hy_row.addWidget(QLabel("Отдача:"))
+        self.hy_up_spin = QSpinBox()
+        self.hy_up_spin.setRange(0, 10000)
+        self.hy_up_spin.setSuffix(" Мбит/с")
+        self.hy_up_spin.setValue(int(manager.settings.get("hysteria_up_mbps", 0) or 0))
+        self.hy_up_spin.valueChanged.connect(self._on_hy_up_changed)
+        hy_row.addWidget(self.hy_up_spin)
+        hy_row.addStretch(1)
+        outer.addLayout(hy_row)
+
+        hy_hint = QLabel(
+            "Только для Hysteria2-серверов. Укажи свою <b>реальную</b> скорость "
+            "(замерь на <a href='https://fast.com' style='color:#f59e0b'>fast.com</a> "
+            "или speedtest) — тогда Hysteria2 включит быстрый режим (brutal CC), и "
+            "туннель потянет больше, не захлёбываясь под торрентами. "
+            "<b>0 = авто</b> (BBR). Не завышай: значение выше реальной скорости "
+            "только вредит (потери пакетов). Применяется при следующем подключении."
+        )
+        hy_hint.setObjectName("dim")
+        hy_hint.setWordWrap(True)
+        hy_hint.setTextFormat(Qt.RichText)
+        hy_hint.setOpenExternalLinks(True)
+        hy_hint.setContentsMargins(28, 0, 0, 0)
+        outer.addWidget(hy_hint)
+
         # --- Language toggle ---
         # Lives in Security section because it's the only other "global
         # preference" — too small to deserve its own section header.
@@ -907,6 +950,12 @@ class SettingsPage(QWidget):
     def _on_route_ru_direct_changed(self, checked: bool) -> None:
         self._manager.update_settings(route_ru_direct=checked)
         self.settings_changed.emit()
+
+    def _on_hy_down_changed(self, val: int) -> None:
+        self._manager.update_settings(hysteria_down_mbps=int(val))
+
+    def _on_hy_up_changed(self, val: int) -> None:
+        self._manager.update_settings(hysteria_up_mbps=int(val))
 
     def _on_leak_test_clicked(self) -> None:
         """Open the leak-test dialog. Uses the SOCKS proxy that xray's

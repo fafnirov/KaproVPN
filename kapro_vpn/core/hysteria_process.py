@@ -32,12 +32,22 @@ HYSTERIA_SOCKS_PORT = 2089
 
 
 def build_client_config(outbound: dict[str, Any],
-                        socks_port: int = HYSTERIA_SOCKS_PORT) -> dict[str, Any]:
+                        socks_port: int = HYSTERIA_SOCKS_PORT,
+                        up_mbps: int = 0, down_mbps: int = 0) -> dict[str, Any]:
     """Map a parsed hy2 ProxyConfig.outbound to a hysteria client config.
 
     Pure + JSON-serialisable so it can be unit-tested without the binary.
     outbound keys (from parser.parse_hysteria2): server, server_port,
     password, tls{server_name, insecure}, optional obfs{type, password}.
+
+    up_mbps / down_mbps: the user's REAL link speed. When both are set,
+    hysteria switches from BBR to its fixed-rate "brutal" congestion
+    control — it sends at this rate regardless of loss, which is what lets
+    Hysteria2 saturate lossy / high-RTT links (the whole point of hy2) and
+    keeps the tunnel from being the bottleneck under heavy load (torrents).
+    MUST be the real measured speed — overshooting causes packet-loss
+    storms that make things WORSE. 0/0 -> BBR (safe default). Note the
+    server can disable this via `ignoreClientBandwidth`.
     """
     server = str(outbound.get("server", "")).strip()
     port = outbound.get("server_port") or 443
@@ -46,6 +56,11 @@ def build_client_config(outbound: dict[str, Any],
         "auth": str(outbound.get("password", "")),
         "socks5": {"listen": f"127.0.0.1:{int(socks_port)}"},
     }
+    if up_mbps and down_mbps and int(up_mbps) > 0 and int(down_mbps) > 0:
+        cfg["bandwidth"] = {
+            "up": f"{int(up_mbps)} mbps",
+            "down": f"{int(down_mbps)} mbps",
+        }
     tls_in = outbound.get("tls") or {}
     tls: dict[str, Any] = {}
     sni = tls_in.get("server_name")
@@ -64,8 +79,9 @@ def build_client_config(outbound: dict[str, Any],
 
 
 def write_client_config(outbound: dict[str, Any],
-                        socks_port: int = HYSTERIA_SOCKS_PORT) -> Path:
-    cfg = build_client_config(outbound, socks_port)
+                        socks_port: int = HYSTERIA_SOCKS_PORT,
+                        up_mbps: int = 0, down_mbps: int = 0) -> Path:
+    cfg = build_client_config(outbound, socks_port, up_mbps, down_mbps)
     path = paths.hysteria_config_file()
     path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
