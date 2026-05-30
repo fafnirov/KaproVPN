@@ -1,0 +1,81 @@
+name: 🐞 Баг / Bug report
+description: Сообщить о проблеме в десктопном KaproVPN
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт! Чем больше деталей — тем быстрее починим.
+        Проблему безопасности (утечка, обход защиты) — **не сюда**, а в
+        [Security Policy](https://github.com/fafnirov/KaproVPN/security/policy).
+  - type: input
+    id: version
+    attributes:
+      label: Версия KaproVPN
+      description: Видно в окне «Установлен» или в заголовке установщика.
+      placeholder: "например, 1.19.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Операционная система
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+        - Другое
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Режим
+      options:
+        - HTTP-прокси (только браузер)
+        - TUN (все приложения)
+        - Не знаю
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Протокол сервера
+      options:
+        - VLESS / Reality
+        - VMess
+        - Trojan
+        - Shadowsocks
+        - Hysteria2
+        - Не знаю
+  - type: textarea
+    id: what
+    attributes:
+      label: Что происходит
+      description: Что пошло не так и что ожидалось?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. …
+        2. …
+        3. …
+  - type: textarea
+    id: diag
+    attributes:
+      label: Диагностика / логи
+      description: >
+        Если уместно: Настройки → «Проверить утечки» (скрин или кнопка
+        «Скопировать диагностику») и/или вкладка «Логи». Это сильно ускоряет разбор.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверил
+      options:
+        - label: Воспроизводится на последней версии (или проверил, что баг в ней есть)
+          required: false
+        - label: Поискал среди существующих Issues — дубликата нет
+          required: false

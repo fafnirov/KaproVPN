@@ -1,0 +1,21 @@
+name: 💡 Идея / Feature request
+description: Предложить улучшение или новую возможность
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Проблема или сценарий
+      description: Какую задачу хочется решить? Что сейчас неудобно?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Предложение
+      description: Как, по-твоему, это должно работать?
+  - type: textarea
+    id: alt
+    attributes:
+      label: Альтернативы и контекст
+      description: Что пробовал, как решают похожие клиенты (Happ, Hiddify, v2rayN…).
