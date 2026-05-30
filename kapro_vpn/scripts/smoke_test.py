@@ -2209,6 +2209,76 @@ check("hysteria: bandwidth brutal-CC config", _hy_bandwidth_config)
 check("hysteria: start auto-retries transient fail", _hy_start_auto_retries)
 
 
+def _speed_test_surface() -> None:
+    # v1.20.0: link-speed probe math + never-raise on failure.
+    from kapro_vpn.core import speed_test as st
+    if st._mbps(12_500_000, 1.0) != 100:        # 12.5 MB in 1 s == 100 Mbps
+        raise AssertionError(f"_mbps wrong: {st._mbps(12_500_000, 1.0)}")
+    if st._mbps(0, 1.0) != 0 or st._mbps(100, 0) != 0:
+        raise AssertionError("_mbps must be 0 for zero bytes or zero time")
+    if st._mbps(10 ** 13, 1.0) > st._MAX_MBPS:
+        raise AssertionError("_mbps must clamp to the max ceiling")
+    # Point at a dead local port so it fails fast → (0, 0), never raises.
+    orig = (st._DOWN_URL, st._UP_URL)
+    st._DOWN_URL = "http://127.0.0.1:9/__down?bytes={n}"
+    st._UP_URL = "http://127.0.0.1:9/__up"
+    try:
+        res = st.measure_link_speed(down_bytes=1000, up_bytes=1000, timeout=1.0)
+    finally:
+        st._DOWN_URL, st._UP_URL = orig
+    if not (isinstance(res, tuple) and len(res) == 2 and all(isinstance(x, int) for x in res)):
+        raise AssertionError(f"measure_link_speed must return (int, int): {res!r}")
+    if res != (0, 0):
+        raise AssertionError(f"dead host must give (0, 0), got {res!r}")
+
+
+def _hy_auto_measures_when_empty() -> None:
+    # v1.20.0: auto mode with no cached value measures the link and feeds
+    # the result into the hysteria config (brutal CC), then caches it.
+    from kapro_vpn.core import controller as ctrl
+    from kapro_vpn.core import speed_test as st
+    mgr = ctrl.ConnectionManager(on_log=lambda _l: None)
+    cfg = parse(_HY2_URL)
+    mgr.settings = dict(mgr.settings)
+    mgr.settings.update(hysteria_auto_bandwidth=True,
+                        hysteria_down_mbps=0, hysteria_up_mbps=0)
+    captured = {}
+
+    class _Hy:
+        def is_running(self): return False
+        def start(self, p): pass
+        def wait_until_listening(self, port, timeout=8.0): return True
+        def stop(self): pass
+        def recent_logs(self): return []
+    mgr.hysteria_process = _Hy()
+
+    def _fake_write(outbound, port, up_mbps=0, down_mbps=0):
+        captured["up"], captured["down"] = up_mbps, down_mbps
+        return "fake.yaml"
+
+    orig = (ctrl.hysteria_installer.ensure_installed,
+            ctrl.hysteria_process.write_client_config,
+            st.measure_link_speed, ctrl.storage.save_settings)
+    ctrl.hysteria_installer.ensure_installed = lambda *a, **k: None
+    ctrl.hysteria_process.write_client_config = _fake_write
+    st.measure_link_speed = lambda *a, **k: (88, 22)
+    ctrl.storage.save_settings = lambda s: None
+    try:
+        mgr._maybe_start_hysteria(cfg)
+    finally:
+        (ctrl.hysteria_installer.ensure_installed,
+         ctrl.hysteria_process.write_client_config,
+         st.measure_link_speed, ctrl.storage.save_settings) = orig
+    if captured.get("down") != 88 or captured.get("up") != 22:
+        raise AssertionError(f"measured bw must reach the hy config: {captured}")
+    if mgr.settings.get("hysteria_down_mbps") != 88:
+        raise AssertionError("measured bw must be cached in settings")
+
+
+check("speed_test: probe math + never-raises", _speed_test_surface)
+check("hysteria: auto-measures link speed when empty", _hy_auto_measures_when_empty)
+
+
 # ---------------------------------------------------------------------------
 # Test 17 — auto-updater: mirror-first download sources (v1.16.17)
 # ---------------------------------------------------------------------------

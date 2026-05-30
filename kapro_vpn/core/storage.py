@@ -170,8 +170,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "ipv6_leak_protection": True,  # block global-unicast IPv6 outbound in TUN mode
     "webrtc_leak_protection": True,  # block STUN UDP (3478/5349/19302/19305-19308) so browsers can't leak real IP via WebRTC
     "dns_leak_protection": True,  # hijack :53 to VPN-tunneled DoH/upstream + silence physical-NIC DNS so ISP can't see queries
-    "hysteria_up_mbps": 0,    # your real uplink speed (Mbps) — enables hy2 brutal CC; 0 = BBR. v1.19.6
-    "hysteria_down_mbps": 0,  # your real downlink speed (Mbps) — enables hy2 brutal CC; 0 = BBR. v1.19.6
+    "hysteria_auto_bandwidth": True,  # auto-measure link speed for hy2 brutal CC (no manual entry). v1.20.0
+    "hysteria_up_mbps": 0,    # uplink Mbps for hy2 brutal CC — auto-measured (auto mode) or manual; 0 = BBR
+    "hysteria_down_mbps": 0,  # downlink Mbps for hy2 brutal CC — auto-measured (auto mode) or manual; 0 = BBR
     "block_ads": False,  # drop geosite:category-ads-all at the xray routing layer (any DNS) — v1.19.0
     "route_ru_direct": False,  # route all geoip:ru traffic direct (bypass VPN), not just the curated domain list — v1.19.0
     "theme": "auto",  # "auto" (follow OS) / "dark" / "light" — see gui/styles.py

@@ -149,9 +149,26 @@ class ConnectionManager:
         except Exception as e:
             raise ConnectionError(f"Не удалось скачать hysteria-клиент: {e}") from e
         port = hysteria_process.HYSTERIA_SOCKS_PORT
-        # Optional link-speed hints → hysteria's high-throughput brutal CC.
+        # Link-speed hints → hysteria's high-throughput brutal CC.
         up = int(self.settings.get("hysteria_up_mbps", 0) or 0)
         down = int(self.settings.get("hysteria_down_mbps", 0) or 0)
+        # Auto mode: if we don't have a measurement yet, measure the link
+        # NOW. We're early in connect() — before the TUN routes go up — so
+        # this hits the RAW link, not the tunnel. Cache the result so later
+        # connects are instant; "Перемерить" clears it to re-measure.
+        if bool(self.settings.get("hysteria_auto_bandwidth", True)) and (up <= 0 or down <= 0):
+            self._log("[*] Замеряю скорость канала для Hysteria2 (разово)…")
+            try:
+                from . import speed_test
+                m_down, m_up = speed_test.measure_link_speed()
+            except Exception:
+                m_down, m_up = 0, 0
+            if m_down > 0 and m_up > 0:
+                down, up = m_down, m_up
+                self.update_settings(hysteria_down_mbps=down, hysteria_up_mbps=up)
+                self._log(f"[*] Замерено: ↓{down} / ↑{up} Мбит/с — включаю brutal CC")
+            else:
+                self._log("[!] Не удалось замерить скорость — Hysteria2 на авто (BBR)")
         try:
             cfg_path = hysteria_process.write_client_config(
                 config.outbound, port, up_mbps=up, down_mbps=down)
