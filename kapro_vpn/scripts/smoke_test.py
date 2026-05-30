@@ -1199,6 +1199,49 @@ def _flag_emoji_extracts_country_code() -> None:
 check("world map: flag-emoji -> ISO code fallback",   _flag_emoji_extracts_country_code)
 
 
+# v1.21.0: animated pin (radar pulse + traffic-reactive). Guards the timer
+# lifecycle (animate only when pinned+visible -> 0 CPU idle) and the
+# throughput->activity mapping.
+def _world_map_animation() -> None:
+    import os as _o
+    _o.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    if QApplication.instance() is None:
+        QApplication([])
+    from kapro_vpn.gui.world_map import WorldMapWidget
+    w = WorldMapWidget()
+    if w._anim.isActive():
+        raise AssertionError("animation must be idle with no pin")
+    w.show()
+    w.set_country("NL")
+    if not w._anim.isActive():
+        raise AssertionError("animation must run when pin is set + visible")
+    # throughput → activity_target in [0,1]
+    w.set_traffic(0)
+    if w._activity_target != 0.0:
+        raise AssertionError("idle traffic must give activity 0")
+    w.set_traffic(10_000_000)
+    if not (0.9 <= w._activity_target <= 1.0):
+        raise AssertionError(f"high traffic must saturate near 1.0, got {w._activity_target}")
+    w.set_traffic(-5)
+    if w._activity_target != 0.0:
+        raise AssertionError("negative traffic must clamp to 0")
+    # ticks must advance the phase and never raise
+    p0 = w._phase
+    for _ in range(5):
+        w._tick()
+    if w._phase == p0:
+        raise AssertionError("phase must advance on tick")
+    # clearing the pin stops the animation (0 CPU when disconnected)
+    w.set_country(None)
+    if w._anim.isActive():
+        raise AssertionError("animation must stop when the pin is cleared")
+    w.deleteLater()
+
+
+check("world map: pulse animation lifecycle + traffic map", _world_map_animation)
+
+
 # ---------------------------------------------------------------------------
 # Test 5.9 — Bandwidth history (v1.15.0)
 # ---------------------------------------------------------------------------

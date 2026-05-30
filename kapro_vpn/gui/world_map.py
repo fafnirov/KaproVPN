@@ -22,13 +22,21 @@ silhouettes, but no fjord-level detail.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPaintEvent, QPen, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
 from . import styles
+
+# Maps total throughput (bytes/s) → a 0..1 "activity" factor that drives the
+# pulse speed/brightness. Log scale so the pin already reacts at low speeds
+# and saturates around a few MB/s. Denominator = activity at the cap.
+_ACTIVITY_CAP_BPS = 4_000_000.0
+_ACTIVITY_KNEE_BPS = 50_000.0
+_ACTIVITY_DENOM = math.log10(1 + _ACTIVITY_CAP_BPS / _ACTIVITY_KNEE_BPS)
 
 
 # Continent outlines, each as a list of (lat_deg, lon_deg) vertices.
@@ -181,6 +189,14 @@ class WorldMapWidget(QWidget):
         self._country_code: Optional[str] = None
         self._theme_getter = lambda: "auto"  # main_window sets this
 
+        # --- pulse animation state (v1.21.0) ---
+        self._phase = 0.0          # 0..1 ring-expansion phase
+        self._activity = 0.0       # smoothed 0..1, current
+        self._activity_target = 0.0  # 0..1, set from live throughput
+        self._anim = QTimer(self)
+        self._anim.setInterval(40)  # 25 FPS — plenty for a tiny widget
+        self._anim.timeout.connect(self._tick)
+
     def set_theme_getter(self, getter) -> None:
         """Hand us a callable that returns the current theme setting
         ('auto'/'dark'/'light'). Called on every paintEvent so the
@@ -189,9 +205,45 @@ class WorldMapWidget(QWidget):
         self._theme_getter = getter
 
     def set_country(self, country_code: Optional[str]) -> None:
-        """Move the pin. None or unknown code → no pin drawn."""
+        """Move the pin. None or unknown code → no pin drawn (+ stop the
+        pulse animation, so a disconnected/empty map costs 0 CPU)."""
         self._country_code = (country_code or "").upper() or None
+        self._sync_animation()
         self.update()
+
+    def set_traffic(self, bytes_per_sec: float) -> None:
+        """Feed live total throughput (up+down, B/s). Drives how fast and
+        bright the radar pulse is — the map literally breathes with traffic.
+        Idle → a slow gentle pulse; busy → fast bright rings."""
+        bps = max(0.0, float(bytes_per_sec or 0.0))
+        if bps <= 0:
+            self._activity_target = 0.0
+        else:
+            self._activity_target = min(
+                1.0, math.log10(1 + bps / _ACTIVITY_KNEE_BPS) / _ACTIVITY_DENOM)
+
+    def _sync_animation(self) -> None:
+        # Animate only while a pin is shown AND the widget is visible.
+        want = self._country_code is not None and self.isVisible()
+        if want and not self._anim.isActive():
+            self._anim.start()
+        elif not want and self._anim.isActive():
+            self._anim.stop()
+
+    def _tick(self) -> None:
+        # Ease current activity toward the target, then advance the phase —
+        # faster when there's more traffic.
+        self._activity += (self._activity_target - self._activity) * 0.15
+        self._phase = (self._phase + 0.018 + self._activity * 0.05) % 1.0
+        self.update()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_animation()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self._anim.stop()
 
     # --- painting --------------------------------------------------------
 
@@ -244,22 +296,44 @@ class WorldMapWidget(QWidget):
         p.end()
 
     def _paint_pin(self, p: QPainter, center: QPointF, color: QColor) -> None:
-        # Soft outer glow — radial gradient from accent (centre, full
-        # alpha) to transparent at the edge. ~12 px radius for visible
-        # halo on the dense continent fill.
-        glow_radius = 12.0
+        # --- radar ping rings (v1.21.0) ---
+        # N rings expand outward from the pin and fade; staggered by phase so
+        # there's always one mid-flight. Brighter + reaching further when
+        # there's more traffic (self._activity). When the animation isn't
+        # running (paint outside the timer, e.g. a one-off grab) _phase is
+        # whatever it was — still draws a valid frame.
+        rings = 3
+        base_alpha = 45 + int(self._activity * 120)      # 45..165
+        max_r = 15.0 + self._activity * 9.0              # 15..24
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for k in range(rings):
+            frac = (self._phase + k / rings) % 1.0
+            r = 4.0 + frac * (max_r - 4.0)
+            alpha = int(base_alpha * (1.0 - frac))
+            if alpha <= 0:
+                continue
+            ring_color = QColor(color)
+            ring_color.setAlpha(alpha)
+            p.setPen(QPen(ring_color, 1.5))
+            p.drawEllipse(center, r, r)
+
+        # --- breathing glow ---
+        # Soft radial halo whose size/alpha gently oscillate so the pin
+        # looks alive even when traffic is idle.
+        breath = 0.5 + 0.5 * math.sin(self._phase * 2.0 * math.pi)
+        glow_radius = 11.0 + 2.5 * breath
         glow = QRadialGradient(center, glow_radius)
         glow_color = QColor(color)
-        glow_color.setAlpha(150)
+        glow_color.setAlpha(120 + int(60 * breath))
         glow.setColorAt(0.0, glow_color)
+        glow_color = QColor(color)
         glow_color.setAlpha(0)
         glow.setColorAt(1.0, glow_color)
         p.setBrush(QBrush(glow))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(center, glow_radius, glow_radius)
 
-        # Solid inner dot — 4 px radius, full accent color. Sharp enough
-        # to be visibly "where the pin is" even on continents of the
-        # same warm-grey background colour.
+        # --- solid inner dot ---
         p.setBrush(QBrush(color))
+        p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(center, 4.0, 4.0)

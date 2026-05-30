@@ -1714,6 +1714,9 @@ class MainWindow(QMainWindow):
             up_rate, down_rate,
             sample.uplink_bytes, sample.downlink_bytes,
         )
+        # v1.21.0: drive the world-map pulse speed/brightness from the live
+        # total throughput — the pin "breathes" with your traffic.
+        self.home_page.world_map.set_traffic(up_rate + down_rate)
         # v1.15.2: same per-second sample feeds the Stats page live block.
         # Cheap when Stats isn't visible — the widget just updates a few
         # labels and appends to a deque(maxlen=60); no repaint happens
