@@ -155,18 +155,39 @@ class ConnectionManager:
         try:
             cfg_path = hysteria_process.write_client_config(
                 config.outbound, port, up_mbps=up, down_mbps=down)
-            self.hysteria_process.start(str(cfg_path))
         except Exception as e:
-            raise ConnectionError(f"Не удалось запустить hysteria: {e}") from e
-        if not self.hysteria_process.wait_until_listening(port, timeout=8.0):
-            tail = " | ".join(self.hysteria_process.recent_logs()[-5:])
+            raise ConnectionError(f"Не удалось записать конфиг hysteria: {e}") from e
+
+        # Start with one automatic retry. The first attempt can FATAL
+        # transiently — a cold QUIC handshake, or the link momentarily
+        # saturated (e.g. a speedtest running while the user fills in the
+        # bandwidth setting) makes hysteria's init handshake to the server
+        # time out ("connect error: timeout: no recent network activity").
+        # A clean restart then succeeds — this is the "fails the first time,
+        # works on the second connect" bug. Do that retry for the user.
+        attempts = 2
+        last_tail = ""
+        for attempt in range(1, attempts + 1):
+            if self.hysteria_process.is_running():
+                self.hysteria_process.stop()  # never leave a half-dead one
+            try:
+                self.hysteria_process.start(str(cfg_path))
+            except Exception as e:
+                raise ConnectionError(f"Не удалось запустить hysteria: {e}") from e
+            if self.hysteria_process.wait_until_listening(port, timeout=8.0):
+                self._log(f"[*] hysteria поднят, локальный SOCKS на :{port}"
+                          + (" (со 2-й попытки)" if attempt > 1 else ""))
+                return port
+            last_tail = " | ".join(self.hysteria_process.recent_logs()[-5:])
             self.hysteria_process.stop()
-            raise ConnectionError(
-                "hysteria-клиент не поднял локальный SOCKS-порт за 8 с. "
-                f"Лог: {tail or '(пусто)'}"
-            )
-        self._log(f"[*] hysteria поднят, локальный SOCKS на :{port}")
-        return port
+            if attempt < attempts:
+                self._log(f"[!] hysteria не поднялся (попытка {attempt}/{attempts}) "
+                          f"— перезапускаю…")
+                time.sleep(1.0)
+        raise ConnectionError(
+            f"hysteria-клиент не поднял локальный SOCKS-порт за 8 с "
+            f"({attempts} попытки). Лог: {last_tail or '(пусто)'}"
+        )
 
     def disconnect(self) -> None:
         # Order matters: stop TUN routing first so traffic stops hitting the

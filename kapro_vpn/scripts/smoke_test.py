@@ -2163,11 +2163,50 @@ def _hy_bandwidth_config() -> None:
         raise AssertionError("bandwidth needs BOTH up and down — omit if one is 0")
 
 
+def _hy_start_auto_retries() -> None:
+    # v1.19.7: a transient first-attempt FATAL (cold QUIC handshake / link
+    # busy from a speedtest) must be retried automatically instead of
+    # surfacing the "fails first, works on second connect" error.
+    from kapro_vpn.core import controller as ctrl
+    mgr = ctrl.ConnectionManager(on_log=lambda _l: None)
+    cfg = parse(_HY2_URL)
+    state = {"starts": 0, "alive": False, "waits": 0}
+
+    class _FakeHy:
+        def is_running(self): return state["alive"]
+        def start(self, path): state["starts"] += 1; state["alive"] = True
+        def wait_until_listening(self, port, timeout=8.0):
+            state["waits"] += 1
+            if state["waits"] == 1:           # attempt 1: simulate FATAL exit
+                state["alive"] = False
+                return False
+            return True                       # attempt 2: comes up
+        def stop(self): state["alive"] = False
+        def recent_logs(self): return ["FATAL ... timeout: no recent network activity"]
+
+    orig = (ctrl.hysteria_installer.ensure_installed,
+            ctrl.hysteria_process.write_client_config, ctrl.time.sleep)
+    ctrl.hysteria_installer.ensure_installed = lambda *a, **k: None
+    ctrl.hysteria_process.write_client_config = lambda *a, **k: "fake.yaml"
+    ctrl.time.sleep = lambda *_a, **_k: None
+    mgr.hysteria_process = _FakeHy()
+    try:
+        port = mgr._maybe_start_hysteria(cfg)
+    finally:
+        (ctrl.hysteria_installer.ensure_installed,
+         ctrl.hysteria_process.write_client_config, ctrl.time.sleep) = orig
+    if port != ctrl.hysteria_process.HYSTERIA_SOCKS_PORT:
+        raise AssertionError(f"expected the hy SOCKS port back, got {port}")
+    if state["starts"] < 2:
+        raise AssertionError(f"transient failure must auto-retry (>=2 starts), got {state['starts']}")
+
+
 check("hysteria: asset name per platform",   _hy_asset_name)
 check("hysteria: client config mapping",     _hy_client_config)
 check("hysteria: xray socks-chain",          _hy_xray_chain)
 check("hysteria: no port -> NotImplemented", _hy_no_port_raises)
 check("hysteria: bandwidth brutal-CC config", _hy_bandwidth_config)
+check("hysteria: start auto-retries transient fail", _hy_start_auto_retries)
 
 
 # ---------------------------------------------------------------------------
