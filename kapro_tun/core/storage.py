@@ -18,13 +18,41 @@ configs.json blob for users who care).
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from . import paths, secrets_store
 from .parser import ProxyConfig
+
+_log = logging.getLogger("kaprotun.storage")
+
+
+class SecretsError(RuntimeError):
+    """Raised when a secret could not be encrypted on a platform that
+    SUPPORTS encryption. We refuse to silently fall back to plaintext for
+    secrets there — the value stays in memory only and the caller surfaces
+    the failure (via last_error()) rather than leaking UUIDs/passwords or a
+    paid subscription link to disk in the clear.
+    """
+
+
+_last_error: Optional[str] = None
+
+
+def last_error() -> Optional[str]:
+    """Most recent secret-write failure, for diagnostics (Settings/Logs).
+    None when the last secret write succeeded (or none has happened)."""
+    return _last_error
+
+
+def _record_error(msg: str) -> None:
+    global _last_error
+    _last_error = msg
+    _log.warning("storage/secrets: %s", msg)
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -50,39 +78,70 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         raise
 
 
-def _read_configs_bytes() -> bytes:
-    """Read raw bytes of configs.json. Empty bytes if file missing.
+def _read_encrypted(path: Path) -> bytes:
+    """Read an encrypted-at-rest file (configs / secrets). Transparently
+    decrypts; returns empty bytes if the file is missing or undecryptable.
 
-    Centralized here so we can put DPAPI decode logic in one place.
+    Centralizes the decrypt-or-legacy-plaintext logic for every secret file.
     """
-    f = paths.configs_file()
-    if not f.is_file():
+    if not path.is_file():
         return b""
-    raw = f.read_bytes()
+    raw = path.read_bytes()
     if secrets_store.looks_encrypted(raw):
         try:
             return secrets_store.decrypt(raw)
-        except Exception:
-            # Encrypted blob unreadable (different Windows user, key
-            # rotation, etc.). Surface as "no configs" rather than
-            # crashing the app at startup — user can re-import.
+        except Exception as e:
+            # Blob unreadable (different Windows user, lost DEK, tamper).
+            # Surface as "empty" rather than crashing at startup — the user
+            # re-imports. Not a privacy regression: we simply can't read
+            # ciphertext that isn't ours. Record it so a "my servers
+            # vanished" report is diagnosable instead of silent.
+            _record_error(f"could not decrypt {path.name}: {type(e).__name__}: {e}")
             return b""
     return raw  # legacy plaintext
 
 
-def _write_configs_bytes(data: bytes) -> None:
-    """Write data to configs.json, DPAPI-encrypted where supported.
+def _write_encrypted(path: Path, data: bytes) -> None:
+    """Write `data` to `path`, encrypted-at-rest where the platform supports
+    it, atomically and with user-only file permissions.
 
-    On encrypt failure (rare — DPAPI Windows API rejection), fall
-    back to plaintext write rather than losing the user's configs.
+    SECURITY — no silent plaintext: if the platform CAN encrypt
+    (secrets_store.is_supported() is True) but encryption fails, we do NOT
+    quietly write the secret in the clear (that would be an invisible
+    privacy regression). We record the reason and raise SecretsError so the
+    caller can surface it; the secret stays in memory only.
+
+    Plaintext is written ONLY where the platform genuinely has no keystore
+    (is_supported() is False — e.g. headless Linux without Secret Service),
+    and that path is explicit and logged. File permissions are the
+    protection there, same as ``~/.ssh/config``.
     """
-    f = paths.configs_file()
     if secrets_store.is_supported():
         try:
             data = secrets_store.encrypt(data)
-        except Exception:
-            pass  # silently fall back to plaintext
-    _atomic_write_bytes(f, data)
+        except Exception as e:
+            msg = (f"encryption failed on a keystore-capable platform "
+                   f"({sys.platform}): {type(e).__name__}: {e} — refusing to "
+                   f"write {path.name} in plaintext")
+            _record_error(msg)
+            raise SecretsError(msg) from e
+    else:
+        _log.info("secrets_store unsupported on %s — %s written in plaintext "
+                  "(file-permission protected)", sys.platform, path.name)
+    _atomic_write_bytes(path, data)
+    if not paths.harden_file_perms(path):
+        _record_error(f"could not chmod 0600 {path.name} (defence-in-depth only)")
+
+
+def _read_configs_bytes() -> bytes:
+    """Raw decrypted bytes of configs.json (empty if missing)."""
+    return _read_encrypted(paths.configs_file())
+
+
+def _write_configs_bytes(data: bytes) -> None:
+    """Write configs.json encrypted-at-rest. Raises SecretsError if the
+    platform supports encryption but it failed (never plaintext-leaks)."""
+    _write_encrypted(paths.configs_file(), data)
 
 
 # --- saved proxy configs --------------------------------------------------
@@ -109,10 +168,23 @@ def load_configs() -> list[ProxyConfig]:
     return out
 
 
-def save_configs(configs: list[ProxyConfig]) -> None:
+def save_configs(configs: list[ProxyConfig]) -> bool:
+    """Persist the server list, encrypted-at-rest. Returns True on success.
+
+    On a keystore-capable platform where encryption fails, returns False and
+    records last_error() — the configs (UUIDs/passwords) are NOT written in
+    plaintext, and the UI is not crashed. In-memory configs survive; the user
+    can retry. The genuinely-unsupported-platform path still writes (plaintext
+    by documented design) and returns True.
+    """
     data = [asdict(c) for c in configs]
     payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
-    _write_configs_bytes(payload)
+    try:
+        _write_configs_bytes(payload)
+        return True
+    except SecretsError as e:
+        _record_error(f"configs not saved (encryption failure, not leaked): {e}")
+        return False
 
 
 # --- direct-routing site list ---------------------------------------------
@@ -150,6 +222,40 @@ def reset_sites_to_default() -> list[str]:
     return sites
 
 
+# --- subscription secrets (encrypted, kept out of settings.json) ----------
+
+# These three were historically stored in settings.json in plaintext. A
+# subscription URL is a bearer credential (anyone with it pulls your paid
+# servers), so they now live in the encrypted secrets.json blob. Runtime
+# code still reads them via settings["subscription_url"] etc.: load_settings
+# overlays them back into the settings dict, and save_settings strips them
+# out of settings.json and writes them to the blob.
+_SUBSCRIPTION_SECRET_KEYS = (
+    "subscription_url", "subscription_urls", "subscription_userinfo",
+)
+
+
+def load_subscription_secrets() -> dict[str, Any]:
+    """Decrypt and return the subscription-secrets blob ({} if absent)."""
+    raw = _read_encrypted(paths.secrets_file())
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_subscription_secrets(secrets: dict[str, Any]) -> None:
+    """Persist subscription secrets to the encrypted blob (only the known
+    secret keys). Raises SecretsError if encryption is supported but failed —
+    the secret is then NOT written anywhere in plaintext."""
+    payload = {k: secrets.get(k) for k in _SUBSCRIPTION_SECRET_KEYS}
+    data = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+    _write_encrypted(paths.secrets_file(), data)
+
+
 # --- app settings ---------------------------------------------------------
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -182,24 +288,54 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 
 def load_settings() -> dict[str, Any]:
     f = paths.settings_file()
-    if not f.is_file():
-        return dict(DEFAULT_SETTINGS)
-    try:
-        data = json.loads(f.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        # UnicodeDecodeError: settings.json is the very first file read at
-        # launch (main.py -> i18n.init_from_settings). A corrupted byte
-        # here would crash before the window ever opens — and a startup
-        # crash means the in-app auto-updater never runs, leaving the user
-        # permanently stuck. Fall back to defaults instead.
-        return dict(DEFAULT_SETTINGS)
+    raw_data: dict[str, Any] = {}
+    if f.is_file():
+        try:
+            parsed = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                raw_data = parsed
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # settings.json is the very first file read at launch (main.py ->
+            # i18n.init_from_settings). A corrupted byte here would crash
+            # before the window ever opens — and a startup crash means the
+            # in-app auto-updater never runs. Fall back to defaults instead.
+            raw_data = {}
     merged = dict(DEFAULT_SETTINGS)
-    merged.update(data if isinstance(data, dict) else {})
+    merged.update(raw_data)
+
+    # Subscription secrets live in the encrypted blob, not settings.json.
+    # Overlay them so runtime code reading settings["subscription_url"] etc.
+    # is unchanged. The blob is authoritative whenever it holds a value.
+    secrets = load_subscription_secrets()
+    for k in _SUBSCRIPTION_SECRET_KEYS:
+        v = secrets.get(k)
+        if v not in (None, "", []):
+            merged[k] = v
+
+    # One-time migration: if the legacy plaintext fields are still physically
+    # present in settings.json, move them into the encrypted blob and strip
+    # the file. Best-effort — if it can't persist now it retries on the next
+    # save; `merged` already carries the values for this session.
+    if any(k in raw_data for k in _SUBSCRIPTION_SECRET_KEYS):
+        try:
+            save_settings(merged)
+        except Exception as e:  # never let migration crash startup
+            _record_error(f"subscription-secret migration deferred: {e}")
     return merged
 
 
 def save_settings(settings: dict[str, Any]) -> None:
+    # Subscription secrets go to the encrypted blob, NEVER to settings.json.
+    try:
+        save_subscription_secrets(settings)
+    except SecretsError as e:
+        # Encryption supported but failed: the secret is not persisted (it
+        # stays in memory) and is never written to settings.json in plaintext.
+        _record_error(f"subscription secrets not persisted this save: {e}")
+    clean = {k: v for k, v in settings.items()
+             if k not in _SUBSCRIPTION_SECRET_KEYS}
     _atomic_write_bytes(
         paths.settings_file(),
-        json.dumps(settings, indent=2, ensure_ascii=False).encode("utf-8"),
+        json.dumps(clean, indent=2, ensure_ascii=False).encode("utf-8"),
     )
+    paths.harden_file_perms(paths.settings_file())

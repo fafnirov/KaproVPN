@@ -26,7 +26,7 @@ from typing import Callable, Optional
 
 import requests
 
-from . import paths
+from . import net_download, paths
 
 GITHUB_LATEST = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 # Pinned fallback used if the live API is unreachable (rate-limit,
@@ -196,26 +196,18 @@ def _mirror_url(filename: str) -> str:
 
 def _download_to_memory(url: str, progress: ProgressCb,
                         attempts: int = 2) -> bytes:
-    """One source, N attempts. Raises on final failure."""
-    sink = io.BytesIO()
+    """One source, N attempts, size-capped at MAX_XRAY_ZIP. Raises on final
+    failure."""
     last_err: Optional[Exception] = None
     for attempt in range(attempts):
         try:
-            sink.seek(0)
-            sink.truncate(0)
-            downloaded = 0
-            with requests.get(url, stream=True, timeout=(10, 20),
-                              proxies=_NO_PROXY) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("Content-Length", 0))
-                for chunk in r.iter_content(chunk_size=64 * 1024):
-                    if not chunk:
-                        continue
-                    sink.write(chunk)
-                    downloaded += len(chunk)
-                    if progress:
-                        progress(downloaded, total)
-            return sink.getvalue()
+            return net_download.download_to_memory(
+                url, net_download.MAX_XRAY_ZIP, progress)
+        except net_download.DownloadTooLarge:
+            # Over-cap isn't transient — surface immediately (don't burn the
+            # retry) so download_and_install moves to the next source / shows
+            # the size error.
+            raise
         except (requests.exceptions.RequestException, OSError) as e:
             last_err = e
     raise RuntimeError(f"download from {url} failed: {last_err}")

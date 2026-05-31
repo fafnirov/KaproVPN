@@ -273,6 +273,19 @@ def classify_fetch_error(exc: Exception) -> FetchError:
     )
 
 
+def is_https_url(url: str) -> bool:
+    """True only for an ``https://`` URL.
+
+    A subscription URL is a bearer credential: anyone holding it can pull
+    your paid server list. Over ``http://`` both the URL and the server list
+    it returns travel in cleartext (and are trivially MITM-able on hostile
+    Wi-Fi / a censored ISP). The UI therefore accepts only https:// — see
+    SubscriptionDialog. The core fetch functions stay scheme-agnostic so the
+    test suite can exercise them against a local ``http://127.0.0.1`` server.
+    """
+    return url.strip().lower().startswith("https://")
+
+
 def parse_subscription_body(body: str) -> list[str]:
     """Pull share-URLs out of a subscription response body.
 

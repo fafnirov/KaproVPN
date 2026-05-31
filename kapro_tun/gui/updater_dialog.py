@@ -84,22 +84,19 @@ class _DownloadWorker(QThread):
         # Bypass system proxy — see core/xray_installer for the rationale:
         # a stale 127.0.0.1 proxy entry would otherwise self-perpetuate
         # the bug (can't auto-update to a fix because the updater fails).
+        from ..core import net_download
         errors: list[str] = []
         for url in self._urls:
             host = url.split("/")[2] if "//" in url else url
             try:
-                downloaded = 0
-                with requests.get(url, stream=True, timeout=(15, 30),
-                                  proxies={"http": "", "https": ""}) as r:
-                    r.raise_for_status()
-                    total = int(r.headers.get("Content-Length", 0))
-                    with open(self._dest, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=64 * 1024):
-                            if not chunk:
-                                continue
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            self.progress.emit(downloaded, total)
+                # Size-capped atomic download (.part -> replace). Rejects a
+                # response that declares, or streams, more than the setup-exe
+                # ceiling — a hostile mirror can't fill the disk.
+                net_download.download_to_file(
+                    url, self._dest, net_download.MAX_SETUP_EXE,
+                    progress=lambda done, total: self.progress.emit(done, total),
+                    timeout=(15, 30),
+                )
                 # Guard: a mirror/CDN serving an HTML error page as 200
                 # would otherwise be "downloaded" and then fail to launch.
                 if self._dest.stat().st_size < 1024 * 1024:

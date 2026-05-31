@@ -239,29 +239,39 @@ class ConnectionManager:
         # Idempotent — no-op if this wasn't a hy2 session.
         if self.hysteria_process.is_running():
             self.hysteria_process.stop()
+        # v2.0.0: both processes that read the runtime configs are down now —
+        # delete the on-disk xray/hysteria configs so the server UUID/password
+        # doesn't linger at rest between sessions.
+        leftover = paths.remove_runtime_configs()
+        if leftover:
+            self._log("[!] Не удалось удалить runtime-конфиги: "
+                      f"{', '.join(leftover)} — они содержат секреты, "
+                      "проверь права на папку данных")
         # Kill-switch teardown LAST — until now the firewall block is the
         # safety net if any step above leaves traffic in a weird state.
-        # Safe to call even if it wasn't installed (idempotent).
+        # Safe to call even if it wasn't installed (idempotent). v2.0.0: a
+        # failed firewall removal can strand the user's connectivity, so it's
+        # surfaced to the log instead of swallowed.
         try:
             killswitch.remove()
-        except Exception:
-            pass
+        except Exception as e:
+            self._log(f"[!] Kill-switch: не удалось снять firewall-правила: {e}")
         # Same idempotent teardown for the IPv6-leak block (v1.11.0).
         # Order doesn't matter relative to killswitch — both are
         # independent firewall rules with non-overlapping scopes
         # (kill-switch = all-IP outbound, ipv6_block = global v6 only).
         try:
             ipv6_block.remove()
-        except Exception:
-            pass
+        except Exception as e:
+            self._log(f"[!] IPv6-block: не удалось снять правило: {e}")
         # v1.16.0: webrtc_block lives in the same firewall-rule family.
         # Independent scope from ipv6_block (v6 unicast vs UDP STUN
         # ports), no ordering concerns — both just need to be torn
         # down before we tell the user we're disconnected.
         try:
             webrtc_block.remove()
-        except Exception:
-            pass
+        except Exception as e:
+            self._log(f"[!] WebRTC-block: не удалось снять правило: {e}")
         self._active = None
 
     def is_connected(self) -> bool:
@@ -567,16 +577,26 @@ class ConnectionManager:
             # widgets, statics, even minor sites) skips the tunnel.
             # Cached list lives in %LOCALAPPDATA%\KaproTUN\geoip-ru.txt;
             # main_window's connect path triggers download if missing.
-            ru_cidrs = geoip_ru.load_cidrs()
-            if ru_cidrs:
-                self._log(f"[*] Добавляю {len(ru_cidrs)} CIDR'ов из geoip:ru…")
-                t0 = time.time()
-                added, adopted = session.add_bypass_cidrs(ru_cidrs, real.gateway, real.index, metric=bypass_metric)
-                self._log(f"[*] geoip:ru за {time.time()-t0:.1f}с: {added} новых"
-                          + (f", {adopted} уже было (подхвачены для очистки)" if adopted else "")
-                          + " — локальный IP-блок идёт мимо TUN")
+            #
+            # GATED on the user's `route_ru_direct` choice (the same flag the
+            # xray routing layer uses for geoip:ru -> direct). When it's OFF
+            # the user wants RU traffic to go THROUGH the VPN like everything
+            # else — installing the kernel bypass anyway would silently route
+            # the whole RU IP space around the tunnel. The curated
+            # direct-domain routes above are independent and always applied.
+            if bool(self.settings.get("route_ru_direct", False)):
+                ru_cidrs = geoip_ru.load_cidrs()
+                if ru_cidrs:
+                    self._log(f"[*] Добавляю {len(ru_cidrs)} CIDR'ов из geoip:ru…")
+                    t0 = time.time()
+                    added, adopted = session.add_bypass_cidrs(ru_cidrs, real.gateway, real.index, metric=bypass_metric)
+                    self._log(f"[*] geoip:ru за {time.time()-t0:.1f}с: {added} новых"
+                              + (f", {adopted} уже было (подхвачены для очистки)" if adopted else "")
+                              + " — локальный IP-блок идёт мимо TUN")
+                else:
+                    self._log("[!] CIDR-список не закеширован — прямые RU-сайты с динамическими IP могут не работать")
             else:
-                self._log("[!] CIDR-список не закеширован — прямые сайты с динамическими IP могут не работать")
+                self._log("[*] geoip:ru-direct выключен — весь RU-трафик идёт через VPN")
         except Exception:
             session.restore()
             self.tun_process.stop()
@@ -654,9 +674,15 @@ class ConnectionManager:
             self._log("[!] Kill-switch требует админа — пропускаю")
             return
         xray_exe = paths.xray_exe()
-        if killswitch.install(xray_exe):
+        # Hysteria2 sessions egress via hysteria.exe (xray chains through it),
+        # so the kill-switch must allow it too or block-all kills the
+        # transport. By the time we arm the switch, hysteria is already up for
+        # a hy2 session — so its running state is the signal. Non-hy2 sessions
+        # pass None and don't widen the allow-list.
+        hy_exe = paths.hysteria_exe() if self.hysteria_process.is_running() else None
+        if killswitch.install(xray_exe, hy_exe):
             self._log("[*] Kill-switch активирован (firewall блок весь трафик "
-                      "мимо xray)")
+                      + ("мимо xray + hysteria)" if hy_exe else "мимо xray)"))
         else:
             self._log("[!] Не удалось установить firewall-правила kill-switch "
                       "— продолжаю без него")

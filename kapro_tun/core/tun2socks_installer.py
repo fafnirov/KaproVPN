@@ -26,7 +26,7 @@ from typing import Callable, Optional
 
 import requests
 
-from . import paths
+from . import net_download, paths
 
 TUN2SOCKS_LATEST = "https://api.github.com/repos/xjasonlyu/tun2socks/releases/latest"
 TUN2SOCKS_PINNED_VERSION = "v2.6.0"
@@ -131,25 +131,22 @@ def _fetch_tun2socks_release() -> ReleaseInfo:
 
 
 def _download(url: str, progress: ProgressCb, total_offset: int = 0,
-              attempts: int = 3) -> bytes:
-    """Download to memory with per-chunk read timeout + retries."""
+              attempts: int = 3,
+              max_bytes: int = net_download.MAX_TUN2SOCKS_ZIP) -> bytes:
+    """Download to memory, size-capped, with per-chunk timeout + retries.
+    `total_offset` lets the wintun fetch continue the same progress bar."""
     last_err: Optional[Exception] = None
+
+    def _prog(done: int, total: int) -> None:
+        if progress:
+            progress(total_offset + done, total_offset + total)
+
     for attempt in range(attempts):
         try:
-            buf = io.BytesIO()
-            downloaded = 0
-            with requests.get(url, stream=True, timeout=(10, 20),
-                              proxies=_NO_PROXY) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("Content-Length", 0))
-                for chunk in r.iter_content(chunk_size=64 * 1024):
-                    if not chunk:
-                        continue
-                    buf.write(chunk)
-                    downloaded += len(chunk)
-                    if progress:
-                        progress(total_offset + downloaded, total_offset + total)
-            return buf.getvalue()
+            return net_download.download_to_memory(
+                url, max_bytes, _prog if progress else None)
+        except net_download.DownloadTooLarge:
+            raise  # over-cap is not transient — surface immediately
         except (requests.exceptions.RequestException, OSError) as e:
             last_err = e
             if attempt < attempts - 1:
@@ -162,7 +159,8 @@ def _mirror_url(filename: str) -> str:
 
 
 def _download_with_fallback(filename: str, upstream_url: str,
-                            progress: ProgressCb) -> bytes:
+                            progress: ProgressCb,
+                            max_bytes: int = net_download.MAX_TUN2SOCKS_ZIP) -> bytes:
     """Try the mirror first, fall back to upstream on any failure.
 
     The mirror serves files by the same filename GitHub uses (so the
@@ -171,11 +169,11 @@ def _download_with_fallback(filename: str, upstream_url: str,
     """
     mirror = _mirror_url(filename)
     try:
-        return _download(mirror, progress, attempts=2)
+        return _download(mirror, progress, attempts=2, max_bytes=max_bytes)
     except RuntimeError:
-        # mirror miss — fall through to upstream
+        # mirror miss (incl. over-cap) — fall through to upstream
         pass
-    return _download(upstream_url, progress, attempts=2)
+    return _download(upstream_url, progress, attempts=2, max_bytes=max_bytes)
 
 
 def _install_tun2socks(progress: ProgressCb) -> None:
@@ -219,7 +217,8 @@ def _install_wintun(progress: ProgressCb) -> None:
     slow-ish from RU and occasionally times out, so the mirror is a
     real win for first-launch latency.
     """
-    data = _download_with_fallback(WINTUN_FILENAME, WINTUN_URL, progress)
+    data = _download_with_fallback(WINTUN_FILENAME, WINTUN_URL, progress,
+                                   max_bytes=net_download.MAX_WINTUN_ZIP)
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         dll_member = next(
             (n for n in zf.namelist()

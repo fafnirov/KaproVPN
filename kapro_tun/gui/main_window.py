@@ -320,13 +320,18 @@ class SettingsPage(QWidget):
         self.radio_http.toggled.connect(self._on_mode_changed)
         self.radio_tun.toggled.connect(self._on_mode_changed)
         outer.addWidget(self.radio_http)
-        http_hint = QLabel("Работает с Chrome/Edge/Firefox. ТГ и игры не туннелируются.")
+        http_hint = QLabel(
+            "Защищает только приложения, понимающие HTTP-прокси (браузеры). "
+            "Остальное — ТГ, игры, системный трафик — идёт мимо туннеля, "
+            "через ваш реальный IP. Это не «VPN на всю систему». Для полной "
+            "защиты выберите TUN."
+        )
         http_hint.setObjectName("dim")
         http_hint.setWordWrap(True)
         http_hint.setContentsMargins(28, 0, 0, 4)
         outer.addWidget(http_hint)
         outer.addWidget(self.radio_tun)
-        tun_hint = QLabel("Туннелирует все программы системно: ТГ, Steam, игры.")
+        tun_hint = QLabel("Туннелирует все программы системно (весь трафик через VPN): ТГ, Steam, игры.")
         tun_hint.setObjectName("dim")
         tun_hint.setWordWrap(True)
         tun_hint.setContentsMargins(28, 0, 0, 0)

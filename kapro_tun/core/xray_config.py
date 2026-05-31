@@ -611,9 +611,10 @@ def write_config(
         route_ru_direct=route_ru_direct,
         hysteria_socks_port=hysteria_socks_port,
     )
-    target = paths.runtime_config_file()
-    target.write_text(
+    # Runtime config carries the server UUID/password — write it atomically
+    # with user-only perms and never log its contents.
+    target = paths.write_secure_text(
+        paths.runtime_config_file(),
         json.dumps(config, indent=2, ensure_ascii=False),
-        encoding="utf-8",
     )
     return str(target)

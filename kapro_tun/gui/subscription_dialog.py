@@ -37,6 +37,7 @@ from ..core.subscription import (
     SubscriptionResult,
     classify_fetch_error,
     import_with_dpi_fallback,
+    is_https_url,
     result_from_body,
 )
 
@@ -193,8 +194,24 @@ class SubscriptionDialog(QDialog):
 
     def _on_fetch(self) -> None:
         url = self.url_edit.text().strip()
-        if not url or not (url.startswith("http://") or url.startswith("https://")):
-            QMessageBox.warning(self, "URL", "Введи корректный http:// или https:// URL.")
+        if not url:
+            QMessageBox.warning(self, "URL", "Введи URL подписки.")
+            return
+        # HTTPS-only: a subscription URL is a bearer credential and http://
+        # sends it (and the server list it returns) in cleartext. Block it
+        # with an actionable message instead of fetching insecurely. The
+        # manual-paste path stays available for any edge case.
+        if url.lower().startswith("http://"):
+            QMessageBox.warning(
+                self, "Небезопасная ссылка",
+                "HTTP-подписки небезопасны — ссылка и список серверов "
+                "передаются открытым текстом и могут быть перехвачены. "
+                "Попросите у провайдера HTTPS-ссылку (https://).",
+            )
+            return
+        if not _subscription.is_https_url(url):
+            QMessageBox.warning(
+                self, "URL", "Введи корректный https:// URL подписки.")
             return
         self.fetch_btn.setEnabled(False)
         self.save_btn.setEnabled(False)

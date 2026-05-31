@@ -16,7 +16,6 @@ The GitHub release tag is prefixed `app/` (e.g. app/v2.9.2).
 """
 from __future__ import annotations
 
-import io
 import stat
 import sys
 import platform
@@ -24,7 +23,7 @@ from typing import Callable, Optional
 
 import requests
 
-from . import paths
+from . import net_download, paths
 
 GITHUB_LATEST = "https://api.github.com/repos/apernet/hysteria/releases/latest"
 # Pinned fallback if the live API is unreachable. Bump alongside the
@@ -87,31 +86,20 @@ def _github_url() -> str:
 
 
 def _download(url: str, progress: ProgressCb, attempts: int = 2) -> bytes:
-    """One source, N attempts. Raises RuntimeError on final failure."""
-    sink = io.BytesIO()
+    """One source, N attempts, capped at MAX_HYSTERIA_BIN. Raises RuntimeError
+    on final failure."""
     last: Optional[Exception] = None
     for _ in range(attempts):
         try:
-            sink.seek(0)
-            sink.truncate(0)
-            done = 0
-            with requests.get(url, stream=True, timeout=(10, 30),
-                              proxies=_NO_PROXY) as r:
-                r.raise_for_status()
-                total = int(r.headers.get("Content-Length", 0))
-                for chunk in r.iter_content(chunk_size=64 * 1024):
-                    if not chunk:
-                        continue
-                    sink.write(chunk)
-                    done += len(chunk)
-                    if progress:
-                        progress(done, total)
-            data = sink.getvalue()
+            data = net_download.download_to_memory(
+                url, net_download.MAX_HYSTERIA_BIN, progress)
             # hysteria binaries are ~10-30 MB; anything under 1 MB is an
             # error page / mirror 404 masquerading as success.
             if len(data) < 1024 * 1024:
                 raise RuntimeError(f"file too small ({len(data)} bytes) — not the binary")
             return data
+        except net_download.DownloadTooLarge:
+            raise  # over-cap is not transient — let the caller try next source
         except (requests.exceptions.RequestException, OSError, RuntimeError) as e:
             last = e
     raise RuntimeError(f"download from {url} failed: {last}")

@@ -82,9 +82,12 @@ def write_client_config(outbound: dict[str, Any],
                         socks_port: int = HYSTERIA_SOCKS_PORT,
                         up_mbps: int = 0, down_mbps: int = 0) -> Path:
     cfg = build_client_config(outbound, socks_port, up_mbps, down_mbps)
-    path = paths.hysteria_config_file()
-    path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
-    return path
+    # Carries the hy2 auth/password — atomic write, user-only perms, no
+    # content logging (see paths.write_secure_text).
+    return paths.write_secure_text(
+        paths.hysteria_config_file(),
+        json.dumps(cfg, indent=2, ensure_ascii=False),
+    )
 
 
 class HysteriaProcess:

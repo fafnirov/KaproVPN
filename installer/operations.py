@@ -218,6 +218,13 @@ def acquire_main_exe(version: str, progress: ProgressCb = None) -> Path:
     return _download_main_exe(version, target, progress)
 
 
+# Hard ceiling for the portable exe download. The real binary is ~40-60 MB;
+# this rejects a hostile/broken mirror that would otherwise stream unbounded
+# data onto the user's disk. (Inline — the installer is a standalone bundle
+# and can't import kapro_tun.core.net_download.)
+_MAX_MAIN_EXE = 150 * 1024 * 1024
+
+
 def _download_main_exe(version: str, target: Path,
                        progress: ProgressCb = None) -> Path:
     url = paths.github_release_exe_url(version)
@@ -238,6 +245,13 @@ def _download_main_exe(version: str, target: Path,
                           proxies={"http": "", "https": ""}) as r:
             r.raise_for_status()
             total = int(r.headers.get("Content-Length", 0))
+            # Reject an over-size download up front (declared size).
+            if total > _MAX_MAIN_EXE:
+                raise RuntimeError(
+                    f"KaproTUN.exe подозрительно большой "
+                    f"({total // (1024 * 1024)} МБ, лимит "
+                    f"{_MAX_MAIN_EXE // (1024 * 1024)} МБ) — скачивание отклонено."
+                )
             downloaded = 0
             last_pct = 5
             with open(tmp, "wb") as f:
@@ -246,6 +260,12 @@ def _download_main_exe(version: str, target: Path,
                         continue
                     f.write(chunk)
                     downloaded += len(chunk)
+                    # ...and abort mid-stream if the server lied / omitted it.
+                    if downloaded > _MAX_MAIN_EXE:
+                        raise RuntimeError(
+                            "Скачивание KaproTUN.exe превысило лимит размера "
+                            "— прервано."
+                        )
                     if not (progress and total):
                         continue
                     # Map download progress to the 5..50 slice of overall.
@@ -265,6 +285,10 @@ def _download_main_exe(version: str, target: Path,
             f"Не удалось скачать KaproTUN.exe с GitHub:\n{e}\n\n"
             "Проверь интернет и доступ к github.com."
         ) from e
+    except RuntimeError:
+        # Size-limit (or other) failure — clean the partial temp file, surface.
+        _silent_unlink(tmp)
+        raise
 
     try:
         os.replace(tmp, target)

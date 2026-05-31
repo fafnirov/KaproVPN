@@ -2128,6 +2128,238 @@ check("subscription User-Agent keeps the KaproVPN/ allowlist prefix",
       _subscription_ua_is_kaprovpn_prefix)
 
 
+# ---------------------------------------------------------------------------
+# Test 14.5 — v2.0.0 security hardening
+# ---------------------------------------------------------------------------
+section("Security hardening (v2.0.0)")
+
+import tempfile as _tf
+import shutil as _sh
+from pathlib import Path as _SecPath
+
+
+def _https_only_subscription_url() -> None:
+    from kapro_tun.core.subscription import is_https_url
+    for good in ("https://prov.example/sub/abc", "HTTPS://X/Y", "  https://z  "):
+        if not is_https_url(good):
+            raise AssertionError(f"https URL wrongly rejected: {good!r}")
+    for bad in ("http://prov.example/sub", "ftp://x", "prov.example/sub", "",
+                "javascript:alert(1)"):
+        if is_https_url(bad):
+            raise AssertionError(f"non-https URL wrongly accepted: {bad!r}")
+
+
+check("subscription URLs: https:// only (UI gate)", _https_only_subscription_url)
+
+
+def _subscription_secrets_encrypted_and_migrated() -> None:
+    """Subscription URL/userinfo move OUT of settings.json into the encrypted
+    blob, runtime code still sees them, and legacy plaintext fields migrate."""
+    import json as _json
+    from kapro_tun.core import storage as _st, paths as _paths, secrets_store as _ss
+    tmp = _SecPath(_tf.mkdtemp(prefix="kt-sec-"))
+    orig = _paths.app_data_dir
+    _paths.app_data_dir = lambda: tmp
+    try:
+        (tmp / "settings.json").write_text(_json.dumps({
+            "mode": "http",
+            "subscription_url": "https://prov.example/sub/TOPSECRET",
+            "subscription_urls": ["https://prov.example/sub/TOPSECRET"],
+            "subscription_userinfo": {"download": 1},
+        }), encoding="utf-8")
+        s = _st.load_settings()
+        if s.get("subscription_url") != "https://prov.example/sub/TOPSECRET":
+            raise AssertionError("subscription_url not surfaced into settings dict")
+        disk = (tmp / "settings.json").read_text(encoding="utf-8")
+        if "TOPSECRET" in disk:
+            raise AssertionError("subscription secret still leaks into settings.json")
+        for k in ("subscription_url", "subscription_urls", "subscription_userinfo"):
+            if k in _json.loads(disk):
+                raise AssertionError(f"{k} not stripped from settings.json")
+        # Round-trips on a fresh load (from the encrypted blob).
+        if _st.load_settings().get("subscription_url") != "https://prov.example/sub/TOPSECRET":
+            raise AssertionError("secret did not round-trip via the blob")
+        blob = (tmp / "secrets.json").read_bytes()
+        if _ss.is_supported():
+            if not _ss.looks_encrypted(blob):
+                raise AssertionError("secrets.json not encrypted on a keystore-capable platform")
+            if b"TOPSECRET" in blob:
+                raise AssertionError("plaintext secret visible inside the encrypted blob")
+    finally:
+        _paths.app_data_dir = orig
+        _sh.rmtree(tmp, ignore_errors=True)
+
+
+check("subscription secrets: encrypted blob + migration off settings.json",
+      _subscription_secrets_encrypted_and_migrated)
+
+
+def _no_silent_plaintext_on_encrypt_failure() -> None:
+    """When the platform CAN encrypt but encryption fails, secrets must NOT be
+    written in plaintext — raise SecretsError / return False + last_error."""
+    from kapro_tun.core import storage as _st, paths as _paths, secrets_store as _ss
+    from kapro_tun.core.parser import ProxyConfig as _PC
+    tmp = _SecPath(_tf.mkdtemp(prefix="kt-encfail-"))
+    o_app, o_sup, o_enc = _paths.app_data_dir, _ss.is_supported, _ss.encrypt
+    _paths.app_data_dir = lambda: tmp
+    _ss.is_supported = lambda: True
+
+    def _boom(_data):
+        raise OSError("DPAPI exploded")
+
+    _ss.encrypt = _boom
+    try:
+        raised = False
+        try:
+            _st.save_subscription_secrets({"subscription_url": "https://x/LEAKME"})
+        except _st.SecretsError:
+            raised = True
+        if not raised:
+            raise AssertionError("save_subscription_secrets must raise SecretsError on supported-platform encrypt failure")
+        blob = tmp / "secrets.json"
+        if blob.exists() and b"LEAKME" in blob.read_bytes():
+            raise AssertionError("secret written in plaintext despite encryption being supported")
+        ok = _st.save_configs([_PC(name="s", protocol="vless", raw_url="vless://x",
+                                   outbound={"server": "1.2.3.4"})])
+        if ok is not False:
+            raise AssertionError("save_configs must return False (not crash) on encrypt failure")
+        if not _st.last_error():
+            raise AssertionError("last_error() must be set after an encryption failure")
+    finally:
+        _paths.app_data_dir, _ss.is_supported, _ss.encrypt = o_app, o_sup, o_enc
+        _sh.rmtree(tmp, ignore_errors=True)
+
+
+check("secrets: no silent plaintext fallback when keystore is supported",
+      _no_silent_plaintext_on_encrypt_failure)
+
+
+def _runtime_config_secure_write_and_cleanup() -> None:
+    import os as _os
+    from kapro_tun.core import paths as _paths
+    tmp = _SecPath(_tf.mkdtemp(prefix="kt-rt-"))
+    orig = _paths.app_data_dir
+    _paths.app_data_dir = lambda: tmp
+    try:
+        p = _paths.write_secure_text(_paths.runtime_config_file(), '{"uuid":"x"}')
+        if p.read_text(encoding="utf-8") != '{"uuid":"x"}':
+            raise AssertionError("write_secure_text content mismatch")
+        if _os.name == "posix":
+            mode = p.stat().st_mode & 0o777
+            if mode != 0o600:
+                raise AssertionError(f"runtime config must be 0600, got {oct(mode)}")
+        _paths.write_secure_text(_paths.hysteria_config_file(), "auth: secret")
+        leftover = _paths.remove_runtime_configs()
+        if leftover:
+            raise AssertionError(f"cleanup left credential files: {leftover}")
+        if _paths.runtime_config_file().exists() or _paths.hysteria_config_file().exists():
+            raise AssertionError("runtime configs not removed on cleanup")
+        if _paths.remove_runtime_configs():
+            raise AssertionError("second cleanup should be a no-op")
+    finally:
+        _paths.app_data_dir = orig
+        _sh.rmtree(tmp, ignore_errors=True)
+
+
+check("runtime configs: secure write (0600) + cleanup", _runtime_config_secure_write_and_cleanup)
+
+
+def _killswitch_allows_hysteria_only_for_hy2() -> None:
+    import sys as _sys
+    if _sys.platform != "win32":
+        return  # kill-switch is Windows-only
+    from kapro_tun.core import killswitch as _ks
+    calls: list = []
+    o_add, o_sup, o_rm = _ks._add_rule, _ks.is_supported, _ks.remove
+    _ks.is_supported = lambda: True
+    _ks._add_rule = lambda name, args: (calls.append((name, list(args))) or True)
+    _ks.remove = lambda: None  # don't touch the real firewall during install
+    try:
+        calls.clear()
+        _ks.install(_SecPath("C:/x/xray.exe"))
+        names = [c[0] for c in calls]
+        if _ks._RULE_ALLOW_HYSTERIA in names:
+            raise AssertionError("non-hy2 install must NOT add the hysteria allow rule")
+        if _ks._RULE_ALLOW_XRAY not in names:
+            raise AssertionError("xray allow rule missing")
+        calls.clear()
+        _ks.install(_SecPath("C:/x/xray.exe"), _SecPath("C:/x/hysteria.exe"))
+        hy = [c for c in calls if c[0] == _ks._RULE_ALLOW_HYSTERIA]
+        if not hy:
+            raise AssertionError("hy2 install must add the hysteria allow rule")
+        if not any("hysteria.exe" in a for a in hy[0][1]):
+            raise AssertionError("hysteria allow rule must target hysteria.exe")
+        # remove() must delete the hysteria rule name too.
+        removed: list = []
+        _ks.remove = o_rm
+        import subprocess as _sp
+        o_run = _sp.run
+        _sp.run = lambda cmd, *a, **k: (removed.append(" ".join(map(str, cmd)))
+                                        or type("R", (), {"returncode": 0})())
+        try:
+            _ks.remove()
+        finally:
+            _sp.run = o_run
+        if not any(_ks._RULE_ALLOW_HYSTERIA in r for r in removed):
+            raise AssertionError("remove() must delete the hysteria rule too")
+    finally:
+        _ks._add_rule, _ks.is_supported, _ks.remove = o_add, o_sup, o_rm
+
+
+check("kill-switch: hysteria.exe allowed only for hy2, removed with the rest",
+      _killswitch_allows_hysteria_only_for_hy2)
+
+
+def _download_size_caps() -> None:
+    from kapro_tun.core import net_download as _nd
+    import requests as _rq
+
+    class _FakeResp:
+        def __init__(self, chunks, declared=None):
+            self._chunks = chunks
+            self.headers = {} if declared is None else {"Content-Length": str(declared)}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size=0):
+            for c in self._chunks:
+                yield c
+
+    o_get = _rq.get
+    try:
+        # Declared length over cap → rejected before streaming.
+        _rq.get = lambda *a, **k: _FakeResp([b"x"], declared=10_000)
+        try:
+            _nd.download_to_memory("http://x", max_bytes=1000)
+            raise AssertionError("declared over-cap must be rejected")
+        except _nd.DownloadTooLarge:
+            pass
+        # No Content-Length but streamed past cap → aborted mid-stream.
+        _rq.get = lambda *a, **k: _FakeResp([b"a" * 600, b"b" * 600])
+        try:
+            _nd.download_to_memory("http://x", max_bytes=1000)
+            raise AssertionError("streamed over-cap must abort")
+        except _nd.DownloadTooLarge:
+            pass
+        # Under cap → returns the bytes intact.
+        _rq.get = lambda *a, **k: _FakeResp([b"hello", b"world"], declared=10)
+        if _nd.download_to_memory("http://x", max_bytes=1000) != b"helloworld":
+            raise AssertionError("under-cap download returned wrong bytes")
+    finally:
+        _rq.get = o_get
+
+
+check("downloads: size cap rejects declared + aborts streamed over-limit",
+      _download_size_caps)
+
+
 def _placeholder_detects_stub() -> None:
     if not _sub.is_placeholder_config(parse(_STUB_URL)):
         raise AssertionError("0.0.0.0 / 'App not supported' not flagged as placeholder")

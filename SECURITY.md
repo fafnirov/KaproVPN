@@ -31,12 +31,27 @@ All app state is in `%LOCALAPPDATA%\KaproTUN\` on Windows,
 
 | File | Content | Protected? |
 |---|---|---|
-| `configs.json` | Your saved VPN configs (UUIDs, passwords, keys) | **DPAPI-encrypted on Windows** (1.8.0+); plaintext on mac/Linux with default 0600 perms |
-| `settings.json` | App preferences, last-used subscription URL | Plaintext (no high-secrecy fields) |
+| `configs.json` | Your saved VPN configs (UUIDs, passwords, keys) | **Encrypted at rest**: DPAPI on Windows (1.8.0+), AES-256-GCM with an OS-keystore key on macOS/Linux (Keychain / Secret Service, 1.16.12+). 0600 perms |
+| `secrets.json` | Subscription URLs + last-seen usage info (traffic/expiry) | **Same encryption as configs.json** (2.0.0). A subscription URL is a bearer credential, so it is **no longer kept in settings.json** |
+| `settings.json` | App preferences only — **no secrets** | Plaintext, 0600. Subscription fields were moved out into `secrets.json` in 2.0.0 (auto-migrated on first launch) |
 | `sites.json` | Domains routed direct (your custom additions) | Plaintext (just hostnames) |
-| `xray-runtime.json` | The xray-core config we generate on connect | Plaintext (regenerated every connect) |
+| `xray-runtime.json`, `hysteria-client.yaml` | The xray / hysteria configs we generate on connect — these embed the server UUID / password / auth | Written 0600, atomically; **deleted on every disconnect/exit** after the processes stop; never logged (2.0.0) |
 | `xray.log` | Error-level xray output, last ~1 MB | Plaintext (no per-connection logging — see below) |
-| `xray/`, `tun/` | xray-core + tun2socks binaries we downloaded | Standard executables |
+| `xray/`, `tun/`, `hysteria/` | xray-core + tun2socks + hysteria binaries we downloaded | Standard executables |
+
+### Encryption: when plaintext is (and isn't) possible
+
+Encryption is the default everywhere a keystore exists. Plaintext at rest is
+used **only** where the platform genuinely has no keystore — e.g. a headless
+Linux box with no Secret Service daemon and no `secret-tool` — and there file
+permissions (0600) are the protection, the same model as `~/.ssh/config`.
+
+What we do **not** do (changed in 2.0.0): silently fall back to plaintext on a
+machine that *can* encrypt. If encryption is supported but fails (a DPAPI API
+rejection, an unreachable keychain), we **refuse to write the secret in the
+clear** — the value stays in memory only, the failure is recorded
+(`storage.last_error()`) and logged, and the app keeps running. You never get
+an invisible downgrade from encrypted to plaintext.
 
 ### What is **NOT** logged
 
@@ -80,11 +95,21 @@ We do not aggregate, correlate, or share these logs.
 
 When fetching a subscription, the request goes out as:
 
-    User-Agent: KaproTUN/<version> (Windows; +https://github.com/fafnirov/KaproTUN)
+    User-Agent: KaproVPN/<version> (Windows; +https://github.com/fafnirov/KaproTUN)
 
 This is so subscription providers can identify us and opt-in to
 support our client (the same way Happ / Streisand / NekoBox identify
 themselves). The User-Agent contains no user-identifying information.
+
+The name stays `KaproVPN/` even though the app is now KaproTUN: several
+providers whitelist their subscription endpoint on the exact `KaproVPN/`
+prefix, and changing it returns a dead "App not supported" stub instead of
+real servers. It is a wire compatibility token, not branding.
+
+**Subscriptions are HTTPS-only.** The import UI rejects `http://` links: a
+subscription URL is a bearer credential, and over plaintext HTTP both it and
+the server list it returns are exposed to anyone on the path. Ask your
+provider for an `https://` link.
 
 When fetching from our own mirror or GitHub, the default Python
 `requests` User-Agent is used — which leaks the urllib3 version.
@@ -104,6 +129,51 @@ default. We add explicit bypass routes for:
 
 For HTTP-proxy mode, DNS is handled by your system resolver as
 normal — only HTTP/HTTPS traffic is tunneled.
+
+## Coverage: HTTP-proxy mode vs TUN
+
+KaproTUN has two modes and they protect different things — be clear which
+you're in:
+
+- **HTTP-proxy mode (default, no admin).** Only apps that honour the system
+  HTTP proxy — browsers, basically — are tunneled, and only their HTTP/HTTPS
+  (TCP) traffic. Everything else — Telegram, games, other system and all UDP
+  traffic — goes out over your **real IP**. This is **not** a whole-system
+  VPN; it's a deliberate trade-off for zero admin rights and instant-on. The
+  UI labels the mode "только браузер" and says so at the toggle.
+- **TUN mode (needs admin / sudo).** Creates a system TUN device and routes
+  the whole machine's IPv4 through the tunnel — every app, like a traditional
+  VPN. Pick this for full-system protection.
+
+The IPv6- and WebRTC-leak blocks are armed in **both** modes — a browser in
+HTTP mode can otherwise leak the real address over native IPv6 or WebRTC STUN.
+
+**RU-direct is opt-in.** Routing the entire Russian IP range *outside* the
+tunnel (`route_ru_direct`) is **off by default**. When off, RU traffic goes
+through the VPN like everything else; the kernel bypass for `geoip:ru` is
+installed only when you turn the option on (2.0.0 fixed a gap where TUN
+bypassed RU regardless of the setting). The curated direct-domain list is
+separate and always applied.
+
+## Kill-switch
+
+Optional (Settings → kill-switch), **Windows-only** today, needs admin. When
+on, it installs Windows Firewall rules that block ALL outbound except: your
+LAN (so printers / NAS / router UI keep working), `xray.exe`, and — for
+Hysteria2 sessions — `hysteria.exe` (the process that actually egresses for
+hy2; 2.0.0 closed a gap where it was blocked and hy2 wouldn't connect under
+the kill-switch). If the tunnel process dies, traffic stops rather than
+silently falling back to your ISP. All KaproTUN firewall rules are removed on
+disconnect and swept on the next launch if the app crashed.
+
+## Downloads
+
+Binaries and the installer are fetched over HTTPS from our mirror
+(`kaprovpn.pro/files`) with a GitHub fallback, and every download is
+**size-capped** (2.0.0): a response that declares — or streams — more than the
+per-asset ceiling is rejected, so a hostile or broken mirror can't fill your
+disk or RAM. We do not yet verify a SHA-256 / signature of the downloaded
+binaries; that is tracked for a future release (see the limits below).
 
 ## What we DON'T defend against
 

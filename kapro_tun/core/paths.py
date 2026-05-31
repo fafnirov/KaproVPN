@@ -168,6 +168,78 @@ def settings_file() -> Path:
     return app_data_dir() / "settings.json"
 
 
+def secrets_file() -> Path:
+    """Encrypted-at-rest blob for non-config secrets — subscription URLs and
+    the last-seen Subscription-Userinfo. Uses the same crypto as
+    configs.json (see secrets_store). Kept OUT of settings.json so a
+    casually-shared settings file never leaks a paid subscription link.
+    """
+    return app_data_dir() / "secrets.json"
+
+
+def harden_file_perms(path: Path) -> bool:
+    """Restrict a sensitive file to the current user. Best-effort defence in
+    depth (the encryption / DPAPI layer is the real protection).
+
+    POSIX: chmod 0600 (owner read/write only) — same as ``~/.ssh/id_*``.
+    Windows: %LOCALAPPDATA% already carries a user-only ACL that children
+    inherit, so there's nothing to tighten; we return True (already private).
+
+    Returns True if perms are (now) user-only, False if the chmod failed —
+    so a caller writing a credential file can log the miss instead of
+    assuming it's locked down.
+    """
+    if os.name != "posix":
+        return True  # %LOCALAPPDATA% is per-user ACL'd on Windows
+    try:
+        os.chmod(path, 0o600)
+        return True
+    except OSError:
+        return False
+
+
+def write_secure_text(path: Path, text: str) -> Path:
+    """Atomically write `text` to `path` with user-only permissions.
+
+    For runtime config files (xray-runtime.json, hysteria-client.yaml) that
+    embed UUIDs / passwords / auth: perms are tightened on the temp file
+    BEFORE the rename, so the credential file is never briefly world-readable.
+    Returns the path. NEVER log `text` — it contains secrets.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_bytes(text.encode("utf-8"))
+        harden_file_perms(tmp)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    harden_file_perms(path)
+    return path
+
+
+def remove_runtime_configs() -> list[str]:
+    """Delete the on-disk runtime configs (xray + hysteria) after their
+    processes have stopped. Call on every disconnect/exit so credentials
+    don't linger at rest.
+
+    Returns the names that could NOT be removed (a credential left on disk)
+    so the caller can surface it instead of hiding the failure. Already-gone
+    files count as success.
+    """
+    failed: list[str] = []
+    for f in (runtime_config_file(), hysteria_config_file()):
+        try:
+            f.unlink(missing_ok=True)
+        except OSError:
+            if f.exists():
+                failed.append(f.name)
+    return failed
+
+
 def runtime_config_file() -> Path:
     """Generated xray JSON config written before each launch."""
     return app_data_dir() / "xray-runtime.json"

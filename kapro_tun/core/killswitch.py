@@ -51,6 +51,12 @@ _RULE_PREFIX = "KaproTUN-killswitch"
 _RULE_BLOCK_ALL = f"{_RULE_PREFIX}-block"
 _RULE_ALLOW_LAN = f"{_RULE_PREFIX}-allow-lan"
 _RULE_ALLOW_XRAY = f"{_RULE_PREFIX}-allow-xray"
+# Hysteria2 sessions: xray chains through the standalone hysteria client,
+# so the process that actually reaches the VPN server over the public
+# internet is hysteria.exe, NOT xray.exe. Without an allow-rule for it the
+# kill-switch's block-all would drop the hy2 transport and the tunnel never
+# comes up. Only added when a hy2 transport is in play (see install()).
+_RULE_ALLOW_HYSTERIA = f"{_RULE_PREFIX}-allow-hysteria"
 
 # Private networks + loopback + link-local — these stay reachable
 # under kill-switch so the user's LAN doesn't die alongside their VPN.
@@ -68,8 +74,14 @@ def is_supported() -> bool:
     return sys.platform == "win32"
 
 
-def install(xray_exe_path: Path) -> bool:
-    """Install the three firewall rules. Returns True on success.
+def install(xray_exe_path: Path,
+            hysteria_exe_path: Optional[Path] = None) -> bool:
+    """Install the kill-switch firewall rules. Returns True on success.
+
+    `hysteria_exe_path` — pass the hysteria client binary ONLY for a
+    Hysteria2 session, so its outbound to the VPN server is allowed too.
+    For non-hy2 sessions leave it None: we don't widen the allow-list with
+    a program that isn't going to make any outbound this session.
 
     Idempotent: if rules already exist (e.g. from a crashed prior run),
     we remove-then-add to make sure parameters are current.
@@ -112,6 +124,18 @@ def install(xray_exe_path: Path) -> bool:
         remove()
         return False
 
+    # 4. Hysteria2 only — allow hysteria.exe outbound, because in a hy2
+    # session it (not xray) is what reaches the VPN server over the public
+    # internet. Skipped entirely for non-hy2 sessions.
+    if hysteria_exe_path is not None:
+        if not _add_rule(_RULE_ALLOW_HYSTERIA, [
+            "dir=out", "action=allow", "enable=yes",
+            "profile=any",
+            f"program={hysteria_exe_path}",
+        ]):
+            remove()
+            return False
+
     return True
 
 
@@ -124,7 +148,8 @@ def remove() -> None:
     """
     if not is_supported():
         return
-    for name in (_RULE_BLOCK_ALL, _RULE_ALLOW_LAN, _RULE_ALLOW_XRAY):
+    for name in (_RULE_BLOCK_ALL, _RULE_ALLOW_LAN, _RULE_ALLOW_XRAY,
+                 _RULE_ALLOW_HYSTERIA):
         try:
             subprocess.run(
                 ["netsh", "advfirewall", "firewall", "delete", "rule",
