@@ -21,7 +21,7 @@ from . import paths
 
 ProgressCb = Optional[Callable[[str, int], None]]  # (status_text, percent 0-100)
 
-UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\KaproVPN"
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\KaproTUN"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -31,8 +31,8 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 #
 # Windows refuses to overwrite or delete a *running* executable — the open
 # handle makes it un-writable and un-deletable (PermissionError [Errno 13] /
-# ERROR_SHARING_VIOLATION). Reinstall (overwrite KaproVPN.exe) and uninstall
-# (delete it) must therefore ensure no KaproVPN.exe is running first.
+# ERROR_SHARING_VIOLATION). Reinstall (overwrite KaproTUN.exe) and uninstall
+# (delete it) must therefore ensure no KaproTUN.exe is running first.
 
 def _exe_is_locked(path: Path) -> bool:
     """True if `path` exists but can't be opened for writing.
@@ -61,7 +61,7 @@ def _wait_until_unlocked(path: Path, timeout: float) -> bool:
 
 
 def _request_graceful_quit() -> None:
-    """Best-effort: ask a running KaproVPN to quit cleanly via its
+    """Best-effort: ask a running KaproTUN to quit cleanly via its
     single-instance pipe, so it disconnects (restoring the system proxy +
     firewall rules) before we touch its files.
 
@@ -72,7 +72,7 @@ def _request_graceful_quit() -> None:
     try:
         from PySide6.QtNetwork import QLocalSocket
 
-        from kapro_vpn.gui.singleton import CMD_QUIT, SERVER_NAME
+        from kapro_tun.gui.singleton import CMD_QUIT, SERVER_NAME
     except Exception:
         return
     try:
@@ -101,7 +101,7 @@ def _taskkill_force(image: str) -> None:
 
 
 def stop_running_app(progress: ProgressCb = None) -> None:
-    """Make sure no running KaproVPN.exe holds a lock on the install dir.
+    """Make sure no running KaproTUN.exe holds a lock on the install dir.
 
     Escalates politely:
       1. If the exe isn't even locked, return immediately (fresh install,
@@ -116,19 +116,19 @@ def stop_running_app(progress: ProgressCb = None) -> None:
         return
 
     if progress:
-        progress("Закрываю запущенный KaproVPN…", 2)
+        progress("Закрываю запущенный KaproTUN…", 2)
     _request_graceful_quit()
     if _wait_until_unlocked(exe, timeout=6.0):
         return
 
     if progress:
-        progress("Завершаю процесс KaproVPN…", 3)
+        progress("Завершаю процесс KaproTUN…", 3)
     _taskkill_force(paths.APP_EXE_NAME)
     if _wait_until_unlocked(exe, timeout=6.0):
         return
 
     raise RuntimeError(
-        "KaproVPN запущен и не закрывается автоматически.\n\n"
+        "KaproTUN запущен и не закрывается автоматически.\n\n"
         "Закрой его вручную (правый клик по иконке в трее → «Выход») "
         "и запусти установщик заново."
     )
@@ -150,7 +150,7 @@ def _cleanup_network_state() -> None:
     _clear_our_system_proxy()
     for mod_name in ("killswitch", "ipv6_block", "webrtc_block"):
         try:
-            mod = __import__(f"kapro_vpn.core.{mod_name}", fromlist=[mod_name])
+            mod = __import__(f"kapro_tun.core.{mod_name}", fromlist=[mod_name])
             if mod.is_active():
                 mod.remove()
         except Exception:
@@ -159,7 +159,7 @@ def _cleanup_network_state() -> None:
 
 def _clear_our_system_proxy() -> None:
     try:
-        from kapro_vpn.core import system_proxy
+        from kapro_tun.core import system_proxy
     except Exception:
         return
     try:
@@ -173,7 +173,7 @@ def _clear_our_system_proxy() -> None:
         return  # a real proxy, not ours — leave it alone
     listen_port = 2080
     try:
-        from kapro_vpn.core import storage
+        from kapro_tun.core import storage
         listen_port = int(storage.load_settings().get("listen_port", 2080))
     except Exception:
         pass
@@ -193,7 +193,7 @@ def _clear_our_system_proxy() -> None:
 # --- file operations ------------------------------------------------------
 
 def acquire_main_exe(version: str, progress: ProgressCb = None) -> Path:
-    """Get KaproVPN.exe into the install dir.
+    """Get KaproTUN.exe into the install dir.
 
     Order of preference:
       1. Locally embedded payload (if anyone re-enables the embed in the
@@ -222,16 +222,16 @@ def _download_main_exe(version: str, target: Path,
                        progress: ProgressCb = None) -> Path:
     url = paths.github_release_exe_url(version)
     if progress:
-        progress(f"Скачиваю KaproVPN.exe v{version}…", 5)
+        progress(f"Скачиваю KaproTUN.exe v{version}…", 5)
     # Download to a sibling temp file, then os.replace() it into place
     # atomically. Two reasons: (a) a failed/interrupted download never
-    # leaves a half-written KaproVPN.exe behind, and (b) if the target is
+    # leaves a half-written KaproTUN.exe behind, and (b) if the target is
     # still locked (app didn't fully exit), the swap fails cleanly with a
     # clear message instead of corrupting the installed binary.
     tmp = target.with_name(target.name + ".download")
     try:
         # Bypass system proxy — installer runs on a fresh machine where
-        # there shouldn't be one, but if a previous KaproVPN crashed and
+        # there shouldn't be one, but if a previous KaproTUN crashed and
         # left a stale 127.0.0.1:2080 entry in the registry, this would
         # try to tunnel through a dead port and fail with WinError 10061.
         with requests.get(url, stream=True, timeout=(15, 30),
@@ -256,13 +256,13 @@ def _download_main_exe(version: str, target: Path,
                     mb = downloaded // (1024 * 1024)
                     total_mb = total // (1024 * 1024)
                     progress(
-                        f"Скачиваю KaproVPN.exe… {mb} / {total_mb} МБ",
+                        f"Скачиваю KaproTUN.exe… {mb} / {total_mb} МБ",
                         pct,
                     )
     except requests.RequestException as e:
         _silent_unlink(tmp)
         raise RuntimeError(
-            f"Не удалось скачать KaproVPN.exe с GitHub:\n{e}\n\n"
+            f"Не удалось скачать KaproTUN.exe с GitHub:\n{e}\n\n"
             "Проверь интернет и доступ к github.com."
         ) from e
 
@@ -271,8 +271,8 @@ def _download_main_exe(version: str, target: Path,
     except OSError as e:
         _silent_unlink(tmp)
         raise RuntimeError(
-            f"Не удалось записать KaproVPN.exe — файл занят:\n{e}\n\n"
-            "Закрой KaproVPN (правый клик по иконке в трее → «Выход») "
+            f"Не удалось записать KaproTUN.exe — файл занят:\n{e}\n\n"
+            "Закрой KaproTUN (правый клик по иконке в трее → «Выход») "
             "и запусти установщик заново."
         ) from e
     if progress:
@@ -491,7 +491,7 @@ def _schedule_delete_on_reboot(path: Path) -> None:
 
 def install_everything(version: str, progress: ProgressCb = None,
                        create_desktop: bool = True) -> None:
-    # A reinstall overwrites KaproVPN.exe in place — if the app is still
+    # A reinstall overwrites KaproTUN.exe in place — if the app is still
     # running, Windows holds the file lock and the write fails with
     # PermissionError. Stop it first (no-op on a fresh install).
     stop_running_app(progress)

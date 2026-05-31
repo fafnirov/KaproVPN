@@ -1,13 +1,13 @@
-# KaproVPN binaries mirror — server setup
+# KaproTUN binaries mirror — server setup
 
 This directory contains the bits you need to host xray-core /
 tun2socks / wintun-driver on your own server so first-launch
-downloads from KaproVPN clients go to you instead of GitHub.
+downloads from KaproTUN clients go to you instead of GitHub.
 
 **Why mirror at all?** GitHub releases CDN is occasionally flaky
 from RU/CIS regions. A mirror under your own domain that you can
 put behind a CDN (Cloudflare, Selectel CDN, etc.) is faster and
-more available. The KaproVPN client always tries the mirror first,
+more available. The KaproTUN client always tries the mirror first,
 falls back to upstream GitHub if the mirror is down — so even a
 broken mirror doesn't break new installs.
 
@@ -37,7 +37,7 @@ Files served by URL:
 | `/tun2socks-linux-arm64.zip`          | same |
 | `/wintun-0.14.1.zip`                  | `wintun.net` |
 | `/hysteria-windows-amd64.exe` (+ darwin/linux, arm64) | `github.com/apernet/hysteria` release (tag `app/vX.Y.Z`) |
-| `/KaproVPN-Setup-v<ver>.exe`          | KaproVPN GitHub release — **in-app auto-updater fallback** when github.com is unreachable from RU |
+| `/KaproTUN-Setup-v<ver>.exe`          | KaproTUN GitHub release — **in-app auto-updater fallback** when github.com is unreachable from RU |
 
 Total disk usage: ~150 MB at any given time.
 
@@ -72,13 +72,13 @@ with the issued cert. Renewal is automatic via systemd timer.
 ### 3. Initial sync of upstream binaries
 
 ```bash
-cp sync-binaries.sh /usr/local/bin/kaprovpn-sync
-chmod +x /usr/local/bin/kaprovpn-sync
-/usr/local/bin/kaprovpn-sync   # first run — pulls everything
+cp sync-binaries.sh /usr/local/bin/kaprotun-sync
+chmod +x /usr/local/bin/kaprotun-sync
+/usr/local/bin/kaprotun-sync   # first run — pulls everything
 ```
 
 The script downloads from upstream into `/var/www/kaprovpn.pro/files/`
-under the exact filenames the KaproVPN client expects. Total run
+under the exact filenames the KaproTUN client expects. Total run
 time on a 100 Mbit link: ~30 seconds.
 
 ### 4. Schedule weekly auto-resync
@@ -88,8 +88,8 @@ crontab -e
 ```
 Add:
 ```
-# Refresh KaproVPN client deps every Sunday 04:00 UTC
-0 4 * * 0 /usr/local/bin/kaprovpn-sync >> /var/log/kaprovpn-sync.log 2>&1
+# Refresh KaproTUN client deps every Sunday 04:00 UTC
+0 4 * * 0 /usr/local/bin/kaprotun-sync >> /var/log/kaprotun-sync.log 2>&1
 ```
 
 That way new Xray-core releases land on the mirror within a week
@@ -106,6 +106,6 @@ curl -sI https://kaprovpn.pro/files/Xray-windows-64.zip | head -3
 #   content-type: application/zip
 ```
 
-Then on a fresh Windows VM that's never run KaproVPN, install v1.2.3+
+Then on a fresh Windows VM that's never run KaproTUN, install v1.2.3+
 and watch the first-launch download progress dialog. It should
 complete in 2-3 seconds (vs. 10-30 seconds against GitHub).

@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Optional
 
 
-APP_NAME = "KaproVPN"
-APP_EXE_NAME = "KaproVPN.exe"
-PUBLISHER = "KaproVPN"
-HOMEPAGE = "https://github.com/fafnirov/KaproVPN"
+APP_NAME = "KaproTUN"
+APP_EXE_NAME = "KaproTUN.exe"
+PUBLISHER = "KaproTUN"
+HOMEPAGE = "https://github.com/fafnirov/KaproTUN"
 
 
 def install_dir() -> Path:
@@ -37,12 +37,12 @@ def desktop_dir() -> Path:
 
 
 def bundled_main_exe() -> Optional[Path]:
-    """If a KaproVPN.exe is embedded with the installer, return its path.
+    """If a KaproTUN.exe is embedded with the installer, return its path.
 
     We dropped embedding in v0.1.4 — the installer downloads the matching
-    KaproVPN.exe from the GitHub release at install time instead — but
+    KaproTUN.exe from the GitHub release at install time instead — but
     keep this lookup around in case anyone re-enables embed via the spec
-    file (or runs the dev/unfrozen flow with a local dist/KaproVPN.exe).
+    file (or runs the dev/unfrozen flow with a local dist/KaproTUN.exe).
     Returns None when no local payload is available.
     """
     if getattr(sys, "frozen", False):
@@ -53,5 +53,5 @@ def bundled_main_exe() -> Optional[Path]:
 
 
 def github_release_exe_url(version: str) -> str:
-    """Direct download URL for KaproVPN.exe attached to a tagged release."""
-    return f"https://github.com/fafnirov/KaproVPN/releases/download/v{version}/{APP_EXE_NAME}"
+    """Direct download URL for KaproTUN.exe attached to a tagged release."""
+    return f"https://github.com/fafnirov/KaproTUN/releases/download/v{version}/{APP_EXE_NAME}"

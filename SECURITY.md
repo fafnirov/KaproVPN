@@ -1,6 +1,6 @@
 # Security & Privacy
 
-KaproVPN is a free, open-source proxy client. We take privacy seriously
+KaproTUN is a free, open-source proxy client. We take privacy seriously
 because that's the whole point of the tool.
 
 If you find a security vulnerability, please email **fafnirov@protonmail.com**
@@ -16,18 +16,18 @@ rather than opening a public GitHub issue. We aim to acknowledge within
 There is no telemetry, no analytics (no Google Analytics, no Sentry,
 no posthog, no Cloudflare Analytics), no "anonymous usage stats", no
 phone-home, no crash reporter. The app does not connect to any
-KaproVPN-owned service except to download required binaries (see below).
+KaproTUN-owned service except to download required binaries (see below).
 
 You can verify this by:
-- Reading the source — every network call comes from `kapro_vpn/core/*.py`
+- Reading the source — every network call comes from `kapro_tun/core/*.py`
 - Running with Wireshark / Process Monitor and watching outbound
 - Auditing the GitHub Actions release workflow (`.github/workflows/release.yml`)
 
 ## What lives on your machine
 
-All app state is in `%LOCALAPPDATA%\KaproVPN\` on Windows,
-`~/Library/Application Support/KaproVPN/` on macOS,
-`~/.local/share/KaproVPN/` on Linux:
+All app state is in `%LOCALAPPDATA%\KaproTUN\` on Windows,
+`~/Library/Application Support/KaproTUN/` on macOS,
+`~/.local/share/KaproTUN/` on Linux:
 
 | File | Content | Protected? |
 |---|---|---|
@@ -43,10 +43,10 @@ All app state is in `%LOCALAPPDATA%\KaproVPN\` on Windows,
 xray-core has an `access_log` feature that writes one line per
 connection: timestamp + source + destination IP/host. We **explicitly
 disable this** in our generated xray config (`"access": "none"` in
-`log:`). Your browsing history is never written to disk by KaproVPN.
+`log:`). Your browsing history is never written to disk by KaproTUN.
 
-If you've been running an older KaproVPN before 1.8.0, check
-`%LOCALAPPDATA%\KaproVPN\xray-access.log` and delete it manually — we
+If you've been running an older KaproTUN before 1.8.0, check
+`%LOCALAPPDATA%\KaproTUN\xray-access.log` and delete it manually — we
 never wrote to it, but the path was reserved.
 
 ## Network: what does the app reach out to?
@@ -54,7 +54,7 @@ never wrote to it, but the path was reserved.
 In normal operation:
 
 1. **Your VPN provider's endpoint** — wherever your active config points
-2. **`api.github.com/repos/fafnirov/KaproVPN/releases/latest`** — checked
+2. **`api.github.com/repos/fafnirov/KaproTUN/releases/latest`** — checked
    silently 2 seconds after launch, then once a day. To detect new
    versions. Returns a small JSON, no IP/User-Agent of your providers.
 3. **`kaprovpn.pro/files`** — our mirror for xray-core / tun2socks /
@@ -80,7 +80,7 @@ We do not aggregate, correlate, or share these logs.
 
 When fetching a subscription, the request goes out as:
 
-    User-Agent: KaproVPN/<version> (Windows; +https://github.com/fafnirov/KaproVPN)
+    User-Agent: KaproTUN/<version> (Windows; +https://github.com/fafnirov/KaproTUN)
 
 This is so subscription providers can identify us and opt-in to
 support our client (the same way Happ / Streisand / NekoBox identify
@@ -110,7 +110,7 @@ normal — only HTTP/HTTPS traffic is tunneled.
 We're honest about the limits:
 
 - **Malware running as you.** If a keylogger is already on your
-  machine, KaproVPN's DPAPI encryption doesn't help — the same
+  machine, KaproTUN's DPAPI encryption doesn't help — the same
   Windows account that decrypts configs can be impersonated by
   anything you run.
 - **State-actor adversary with disk access + your Windows password.**
@@ -129,14 +129,14 @@ We're honest about the limits:
   being open. A determined supply-chain attacker who compromises my
   GitHub account could ship a backdoored binary — and you wouldn't
   catch it just from the binary. Building from source removes this
-  risk: `python -m PyInstaller KaproVPN.spec`.
+  risk: `python -m PyInstaller KaproTUN.spec`.
 
 ## Reporting
 
-Email **fafnirov@protonmail.com** with subject prefix `[KaproVPN
+Email **fafnirov@protonmail.com** with subject prefix `[KaproTUN
 security]`. Include:
 
-- KaproVPN version (from About / `__version__`)
+- KaproTUN version (from About / `__version__`)
 - OS + version
 - Reproduction steps OR proof-of-concept
 - Severity in your view

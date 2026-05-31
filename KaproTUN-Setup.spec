@@ -1,0 +1,93 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""PyInstaller spec for KaproTUN-Setup.exe — the branded installer.
+
+Build pipeline:
+    1. pyinstaller KaproTUN.spec        # builds dist/KaproTUN.exe (~57 MB)
+    2. pyinstaller KaproTUN-Setup.spec  # embeds dist/KaproTUN.exe → dist/KaproTUN-Setup.exe
+
+Result: a single ~110 MB Setup.exe the user downloads, runs, and gets a
+custom amber-on-dark installer flow (Welcome → Progress → Done) that
+copies KaproTUN.exe to %LOCALAPPDATA%\\Programs\\KaproTUN, creates Start
+Menu + Desktop shortcuts, registers an uninstaller. No admin required.
+"""
+import glob
+
+# Note: we deliberately do NOT embed dist/KaproTUN.exe here any more.
+# Doing so doubled the installer's download size to ~100 MB. Instead,
+# the installer downloads KaproTUN.exe from the matching GitHub release
+# at install time (see installer/operations.py). Keeps the Setup.exe
+# under ~45 MB at the cost of requiring internet during install.
+# (Acceptable — VPN client; if you can't reach github.com you wouldn't
+# get far anyway.)
+
+# Optional designer assets — bundled if present, fall back to app icons.
+installer_pngs = [
+    (p, 'installer') for p in glob.glob('installer/*.png')
+]
+
+a = Analysis(
+    ['installer_run.py'],
+    pathex=[],
+    binaries=[],
+    datas=[
+        # Reuse main-app brand assets (icon, splash) inside the installer
+        # so the welcome page can display them without us duplicating files.
+        ('kapro_tun/data', 'kapro_tun/data'),
+
+        *installer_pngs,
+    ],
+    hiddenimports=[
+        # Reached only via lazy imports in installer/operations.py, so
+        # PyInstaller's static analysis can't see them: the graceful-quit
+        # pipe (QtNetwork + singleton) and the uninstall network-cleanup
+        # safety net (system proxy + firewall-rule modules).
+        'PySide6.QtNetwork',
+        'kapro_tun.gui.singleton',
+        'kapro_tun.core.system_proxy',
+        'kapro_tun.core.storage',
+        'kapro_tun.core.killswitch',
+        'kapro_tun.core.ipv6_block',
+        'kapro_tun.core.webrtc_block',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        'tkinter', 'matplotlib', 'numpy', 'scipy', 'PIL',
+        'pytest', 'unittest', 'doctest', 'pydoc',
+        'PySide6.QtBluetooth', 'PySide6.Qt3DCore', 'PySide6.Qt3DRender',
+        'PySide6.Qt3DAnimation', 'PySide6.QtCharts',
+        'PySide6.QtDataVisualization', 'PySide6.QtMultimedia',
+        'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets',
+        'PySide6.QtPdf', 'PySide6.QtPdfWidgets', 'PySide6.QtTest',
+        'PySide6.QtPositioning', 'PySide6.QtLocation',
+    ],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='KaproTUN-Setup',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='kapro_tun/data/icon.ico',
+)

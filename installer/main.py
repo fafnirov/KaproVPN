@@ -1,4 +1,4 @@
-"""KaproVPN-Setup.exe entry point.
+"""KaproTUN-Setup.exe entry point.
 
 Modes (CLI flags):
   default             → auto-detect:
@@ -28,7 +28,7 @@ def main() -> int:
         return run(mode="uninstall")
     if "--install" in sys.argv:
         return run(mode="install")
-    # No flag: pick the right mode based on whether KaproVPN is already
+    # No flag: pick the right mode based on whether KaproTUN is already
     # on disk. Running Setup.exe a second time should NOT silently
     # re-install — it should ask. Same UX as Telegram, Slack, etc.
     if paths.installed_exe_path().is_file():

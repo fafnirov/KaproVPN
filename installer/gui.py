@@ -29,10 +29,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kapro_vpn import __version__
-from kapro_vpn.gui import icons as app_icons
-from kapro_vpn.gui.styles import DARK_QSS
-from kapro_vpn.gui.titlebar import TitleBar
+from kapro_tun import __version__
+from kapro_tun.gui import icons as app_icons
+from kapro_tun.gui.styles import DARK_QSS
+from kapro_tun.gui.titlebar import TitleBar
 
 from . import operations, paths
 
@@ -90,14 +90,14 @@ class WelcomePage(QWidget):
 
         # Hero image — prefer installer/hero.png if present, fall back to
         # splash. If we used the splash fallback, it already has the
-        # "KaproVPN" wordmark baked in, so skip the title label below to
-        # avoid the visible "KaproVPN / KaproVPN" duplication.
+        # "KaproTUN" wordmark baked in, so skip the title label below to
+        # avoid the visible "KaproTUN / KaproTUN" duplication.
         hero_widget, hero_has_text = self._build_hero()
         layout.addWidget(hero_widget, alignment=Qt.AlignHCenter)
         layout.addSpacing(18)
 
         if not hero_has_text:
-            title = QLabel("KaproVPN")
+            title = QLabel("KaproTUN")
             title.setObjectName("h1")
             title.setAlignment(Qt.AlignHCenter)
             layout.addWidget(title)
@@ -150,7 +150,7 @@ class WelcomePage(QWidget):
         """Return (widget, has_baked_text).
 
         `has_baked_text` is True when the fallback splash is used — its
-        PNG already contains the "KaproVPN" wordmark, so the caller
+        PNG already contains the "KaproTUN" wordmark, so the caller
         should skip rendering its own title label.
         """
         hero = _asset_path("hero.png")
@@ -160,14 +160,14 @@ class WelcomePage(QWidget):
             pix = QPixmap(str(hero)).scaledToWidth(380, Qt.SmoothTransformation)
             lbl.setPixmap(pix)
             return (lbl, False)
-        # Fallback: splash has KaproVPN wordmark baked in.
+        # Fallback: splash has KaproTUN wordmark baked in.
         pix = app_icons.splash_pixmap(220)
         lbl.setPixmap(pix)
         return (lbl, True)
 
 
 class MaintenancePage(QWidget):
-    """Shown when Setup.exe runs on a machine where KaproVPN is already
+    """Shown when Setup.exe runs on a machine where KaproTUN is already
     installed. Two big choices: Reinstall or Uninstall. No accidental
     re-install — user has to deliberately pick.
     """
@@ -189,7 +189,7 @@ class MaintenancePage(QWidget):
         layout.addSpacing(18)
 
         if not hero_has_text:
-            title = QLabel("KaproVPN")
+            title = QLabel("KaproTUN")
             title.setObjectName("h1")
             title.setAlignment(Qt.AlignHCenter)
             layout.addWidget(title)
@@ -234,7 +234,7 @@ class MaintenancePage(QWidget):
         layout.addSpacing(8)
 
         # --- Uninstall (destructive secondary) ---
-        uninstall_btn = QPushButton("Удалить KaproVPN")
+        uninstall_btn = QPushButton("Удалить KaproTUN")
         uninstall_btn.setObjectName("danger")
         uninstall_btn.setMinimumHeight(38)
         uninstall_btn.clicked.connect(self.uninstall_clicked.emit)
@@ -259,7 +259,7 @@ class MaintenancePage(QWidget):
 
 
 def _detect_installed_version() -> Optional[str]:
-    """Read the version embedded in the installed KaproVPN.exe.
+    """Read the version embedded in the installed KaproTUN.exe.
 
     Cheap PowerShell shell-out via Get-Item.VersionInfo. Returns None
     if probe fails — caller falls back to "unknown version".
@@ -346,7 +346,7 @@ class DonePage(QWidget):
             title.setAlignment(Qt.AlignHCenter)
             layout.addWidget(title)
             layout.addSpacing(8)
-            sub = QLabel("KaproVPN установлен")
+            sub = QLabel("KaproTUN установлен")
             sub.setObjectName("muted")
             sub.setAlignment(Qt.AlignHCenter)
             layout.addWidget(sub)
@@ -365,7 +365,7 @@ class DonePage(QWidget):
         layout.addStretch(1)
 
         if success:
-            self.launch_check = QCheckBox("Запустить KaproVPN сейчас")
+            self.launch_check = QCheckBox("Запустить KaproTUN сейчас")
             self.launch_check.setChecked(True)
             layout.addWidget(self.launch_check, alignment=Qt.AlignHCenter)
             layout.addSpacing(12)
@@ -403,10 +403,10 @@ class InstallerWindow(QMainWindow):
         self._mode = mode
         self._uninstall = (mode == "uninstall")
         title = {
-            "install": "KaproVPN — Установка",
-            "maintenance": "KaproVPN — Установлен",
-            "uninstall": "KaproVPN — Удаление",
-        }.get(mode, "KaproVPN — Установка")
+            "install": "KaproTUN — Установка",
+            "maintenance": "KaproTUN — Установлен",
+            "uninstall": "KaproTUN — Удаление",
+        }.get(mode, "KaproTUN — Установка")
         self.setWindowTitle(title)
         self.setWindowIcon(app_icons.app_icon())
         # Roomier than the cramped 620 — the welcome page has hero +
@@ -460,7 +460,7 @@ class InstallerWindow(QMainWindow):
 
     def _build_maintenance_flow(self) -> None:
         """Two-choice menu when the user runs Setup.exe on a machine
-        that already has KaproVPN installed.
+        that already has KaproTUN installed.
 
         Reinstall ⇒ falls through to the install flow (which is
         idempotent in operations.install_everything — overwrites in
@@ -488,8 +488,8 @@ class InstallerWindow(QMainWindow):
             self.installing = InstallingPage()
             self.stack.addWidget(self.installing)
         # Update window chrome so the user knows what's happening now.
-        self.setWindowTitle("KaproVPN — Переустановка")
-        self.titlebar.title_label.setText("KaproVPN — Переустановка")
+        self.setWindowTitle("KaproTUN — Переустановка")
+        self.titlebar.title_label.setText("KaproTUN — Переустановка")
         self._mode = "install"
         self._uninstall = False
         # Re-use the install worker path directly (same as
@@ -498,8 +498,8 @@ class InstallerWindow(QMainWindow):
 
     def _switch_to_uninstall(self) -> None:
         """Maintenance → Uninstall: build the existing uninstall flow."""
-        self.setWindowTitle("KaproVPN — Удаление")
-        self.titlebar.title_label.setText("KaproVPN — Удаление")
+        self.setWindowTitle("KaproTUN — Удаление")
+        self.titlebar.title_label.setText("KaproTUN — Удаление")
         self._mode = "uninstall"
         self._uninstall = True
         self._build_uninstall_flow()
@@ -556,14 +556,14 @@ class InstallerWindow(QMainWindow):
         layout.addWidget(art)
         layout.addSpacing(20)
 
-        title = QLabel("Удалить KaproVPN?")
+        title = QLabel("Удалить KaproTUN?")
         title.setObjectName("h1")
         title.setAlignment(Qt.AlignHCenter)
         layout.addWidget(title)
         layout.addSpacing(8)
         sub = QLabel(
             "Будут удалены: программа, ярлыки, запись в Programs &amp; Features. "
-            "Скачанные xray.exe / tun2socks.exe в %LOCALAPPDATA%\\KaproVPN\\ "
+            "Скачанные xray.exe / tun2socks.exe в %LOCALAPPDATA%\\KaproTUN\\ "
             "останутся — удали их вручную, если нужно полностью."
         )
         sub.setObjectName("muted")
@@ -614,8 +614,8 @@ class InstallerWindow(QMainWindow):
         for lbl in done.findChildren(QLabel):
             if lbl.text() == "Готово!":
                 lbl.setText("Удалено")
-            elif lbl.text() == "KaproVPN установлен":
-                lbl.setText("KaproVPN удалён")
+            elif lbl.text() == "KaproTUN установлен":
+                lbl.setText("KaproTUN удалён")
         if done.launch_check is not None:
             done.launch_check.setVisible(False)
         done.close_clicked.connect(lambda _launch: self.close())
@@ -646,8 +646,8 @@ def run(mode: str = "install", *, uninstall: bool = False) -> int:
         mode = "uninstall"
 
     app = QApplication(sys.argv)
-    app.setApplicationName("KaproVPN Installer")
-    app.setOrganizationName("KaproVPN")
+    app.setApplicationName("KaproTUN Installer")
+    app.setOrganizationName("KaproTUN")
     app.setStyleSheet(DARK_QSS)
     app.setWindowIcon(app_icons.app_icon())
 
@@ -669,7 +669,7 @@ class _SilentUpdateWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("KaproVPN — обновление")
+        self.setWindowTitle("KaproTUN — обновление")
         self.setWindowIcon(app_icons.app_icon())
         self.setFixedSize(360, 130)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -688,7 +688,7 @@ class _SilentUpdateWindow(QMainWindow):
         row.addSpacing(8)
 
         text_col = QVBoxLayout()
-        title = QLabel("Обновляю KaproVPN…")
+        title = QLabel("Обновляю KaproTUN…")
         title.setObjectName("h2")
         text_col.addWidget(title)
         self.status_label = QLabel("Подготовка…")
@@ -721,15 +721,15 @@ def run_silent() -> int:
     """Headless install used by the in-app auto-updater."""
     from PySide6.QtWidgets import QApplication
 
-    # Wait a beat so the calling KaproVPN.exe finishes shutting down
+    # Wait a beat so the calling KaproTUN.exe finishes shutting down
     # and Windows releases its file handles. Without this we get an
     # ERROR_SHARING_VIOLATION when copy_main_exe tries to overwrite
     # the running exe.
     time.sleep(1.5)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("KaproVPN Updater")
-    app.setOrganizationName("KaproVPN")
+    app.setApplicationName("KaproTUN Updater")
+    app.setOrganizationName("KaproTUN")
     app.setStyleSheet(DARK_QSS)
     app.setWindowIcon(app_icons.app_icon())
 

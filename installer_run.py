@@ -1,4 +1,4 @@
-"""PyInstaller entry script for KaproVPN-Setup.exe."""
+"""PyInstaller entry script for KaproTUN-Setup.exe."""
 import sys
 
 from installer.main import main

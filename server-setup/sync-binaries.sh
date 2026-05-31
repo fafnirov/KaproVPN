@@ -1,9 +1,9 @@
 #!/bin/bash
 # Sync upstream xray-core, tun2socks, wintun binaries into the
-# KaproVPN mirror directory. Run weekly via cron.
+# KaproTUN mirror directory. Run weekly via cron.
 #
 # Usage:
-#   /usr/local/bin/kaprovpn-sync
+#   /usr/local/bin/kaprotun-sync
 #
 # Side effects:
 #   Downloads from GitHub / wintun.net into a temp dir, atomically
@@ -22,7 +22,7 @@ set -euo pipefail
 # the `location /files/` root in the site's server block — see
 # nginx.conf.example. Adjust if your kaprovpn.pro docroot differs.
 MIRROR_DIR="/var/www/kaprovpn.pro/files"
-TMP_DIR="$(mktemp -d -t kaprovpn-sync-XXXXXX)"
+TMP_DIR="$(mktemp -d -t kaprotun-sync-XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Pinned upstream versions. Bump these when a new release comes out
@@ -106,25 +106,25 @@ done
 echo "=== wintun.net $WINTUN_VERSION ==="
 fetch "https://www.wintun.net/builds/${WINTUN_FILE}" "$TMP_DIR/$WINTUN_FILE" || echo "  [skip] $WINTUN_FILE (wintun.net unreachable — Windows TUN users fall back to wintun.net directly)"
 
-echo "=== KaproVPN release installer (latest) ==="
+echo "=== KaproTUN release installer (latest) ==="
 # Mirror the latest Windows installer so the in-app auto-updater can fall
 # back here when github.com is DNS-blocked / throttled (the common RU
-# failure). Flat versioned name `KaproVPN-Setup-v<ver>.exe` matches what
+# failure). Flat versioned name `KaproTUN-Setup-v<ver>.exe` matches what
 # updater_dialog._mirror_setup_url() requests. Old versions are left in
 # place (clients may still be updating from them); prune by hand if disk
 # gets tight.
-LATEST_TAG="$(curl -fsSL https://api.github.com/repos/fafnirov/KaproVPN/releases/latest \
+LATEST_TAG="$(curl -fsSL https://api.github.com/repos/fafnirov/KaproTUN/releases/latest \
               | grep -oP '"tag_name":\s*"\K[^"]+' | head -1 || true)"
 if [ -n "${LATEST_TAG:-}" ]; then
     VER="${LATEST_TAG#v}"
-    if fetch "https://github.com/fafnirov/KaproVPN/releases/download/${LATEST_TAG}/KaproVPN-Setup.exe" \
-             "$TMP_DIR/KaproVPN-Setup-v${VER}.exe"; then
+    if fetch "https://github.com/fafnirov/KaproTUN/releases/download/${LATEST_TAG}/KaproTUN-Setup.exe" \
+             "$TMP_DIR/KaproTUN-Setup-v${VER}.exe"; then
         echo "  mirrored installer v${VER}"
     else
-        echo "  [skip] no KaproVPN-Setup.exe asset for ${LATEST_TAG}"
+        echo "  [skip] no KaproTUN-Setup.exe asset for ${LATEST_TAG}"
     fi
 else
-    echo "  [skip] couldn't resolve latest KaproVPN release tag"
+    echo "  [skip] couldn't resolve latest KaproTUN release tag"
 fi
 
 echo "=== Promoting to $MIRROR_DIR ==="

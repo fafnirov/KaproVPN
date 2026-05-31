@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 🔒 Уязвимость безопасности
-    url: https://github.com/fafnirov/KaproVPN/security/policy
+    url: https://github.com/fafnirov/KaproTUN/security/policy
     about: Сообщайте приватно через Security Policy, а не публичным Issue.
   - name: 💬 Вопрос или обсуждение
-    url: https://github.com/fafnirov/KaproVPN/discussions
+    url: https://github.com/fafnirov/KaproTUN/discussions
     about: Вопросы по использованию, идеи и помощь — в Discussions.

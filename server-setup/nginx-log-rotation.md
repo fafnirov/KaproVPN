@@ -1,6 +1,6 @@
 # Mirror access-log retention — keep it short
 
-KaproVPN's file mirror (files.kaprovpn.pro) is logged by nginx like any
+KaproTUN's file mirror (files.kaprovpn.pro) is logged by nginx like any
 website. Each line: IP + timestamp + User-Agent + downloaded URL.
 
 For a privacy-respecting project, we keep this log retention as short

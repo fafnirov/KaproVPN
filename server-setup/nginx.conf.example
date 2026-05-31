@@ -1,4 +1,4 @@
-# Path-based KaproVPN binary mirror.
+# Path-based KaproTUN binary mirror.
 #
 # Paste this `location` block INTO the existing kaprovpn.pro server block
 # (the :443 vhost certbot already manages for the website). No new
@@ -6,7 +6,7 @@
 # that's already live.
 #
 # The client requests  https://kaprovpn.pro/files/<asset>  — see
-# KAPROVPN_MIRROR_BASE in xray_installer / hysteria_installer /
+# KAPROTUN_MIRROR_BASE in xray_installer / hysteria_installer /
 # updater_dialog. sync-binaries.sh drops the files into
 # /var/www/kaprovpn.pro/files (MIRROR_DIR); keep `alias` below in sync.
 

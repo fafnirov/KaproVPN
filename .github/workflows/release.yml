@@ -1,4 +1,4 @@
-name: Build & release KaproVPN
+name: Build & release KaproTUN
 
 # Auto-builds on every vX.Y.Z tag push for all three desktop OSes.
 # The matrix runs in parallel; each job produces its own artifact and
@@ -41,7 +41,7 @@ jobs:
         env:
           # Headless Qt — no display server on the runner.
           QT_QPA_PLATFORM: offscreen
-        run: python -m kapro_vpn.scripts.smoke_test
+        run: python -m kapro_tun.scripts.smoke_test
 
   build:
     name: Build (${{ matrix.os }})
@@ -54,16 +54,16 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact_name: KaproVPN-Windows-x64.exe
+            artifact_name: KaproTUN-Windows-x64.exe
             build_cmd: |
-              python -m PyInstaller KaproVPN.spec --noconfirm --log-level WARN
-              python -m PyInstaller KaproVPN-Setup.spec --noconfirm --log-level WARN
+              python -m PyInstaller KaproTUN.spec --noconfirm --log-level WARN
+              python -m PyInstaller KaproTUN-Setup.spec --noconfirm --log-level WARN
             payload_path: |
-              dist/KaproVPN-Setup.exe
-              dist/KaproVPN.exe
+              dist/KaproTUN-Setup.exe
+              dist/KaproTUN.exe
             shell: pwsh
           - os: macos-latest
-            artifact_name: KaproVPN-macOS-arm64.dmg
+            artifact_name: KaproTUN-macOS-arm64.dmg
             # macos-latest is Apple Silicon (M-series). Build .app then
             # wrap it in a .dmg via hdiutil. The .dmg is a single double-
             # clickable file users drag into /Applications.
@@ -74,55 +74,55 @@ jobs:
               # PNG (Apple's required iconset has square sizes 16..512).
               mkdir -p icon.iconset
               for SZ in 16 32 128 256 512; do
-                sips -z $SZ $SZ kapro_vpn/data/icon.png \
+                sips -z $SZ $SZ kapro_tun/data/icon.png \
                   --out icon.iconset/icon_${SZ}x${SZ}.png > /dev/null
                 DBL=$((SZ * 2))
-                sips -z $DBL $DBL kapro_vpn/data/icon.png \
+                sips -z $DBL $DBL kapro_tun/data/icon.png \
                   --out icon.iconset/icon_${SZ}x${SZ}@2x.png > /dev/null
               done
-              iconutil -c icns icon.iconset -o kapro_vpn/data/icon.icns
-              ls -lh kapro_vpn/data/icon.icns
-              python -m PyInstaller KaproVPN.spec --noconfirm --log-level WARN
+              iconutil -c icns icon.iconset -o kapro_tun/data/icon.icns
+              ls -lh kapro_tun/data/icon.icns
+              python -m PyInstaller KaproTUN.spec --noconfirm --log-level WARN
               ls -la dist/
               # Package .app into a .dmg
               mkdir -p dist/dmg_root
-              cp -R dist/KaproVPN.app dist/dmg_root/
+              cp -R dist/KaproTUN.app dist/dmg_root/
               ln -s /Applications dist/dmg_root/Applications
-              hdiutil create -volname "KaproVPN" -srcfolder dist/dmg_root \
-                -ov -format UDZO dist/KaproVPN-macOS-arm64.dmg
+              hdiutil create -volname "KaproTUN" -srcfolder dist/dmg_root \
+                -ov -format UDZO dist/KaproTUN-macOS-arm64.dmg
               rm -rf dist/dmg_root
-            payload_path: dist/KaproVPN-macOS-arm64.dmg
+            payload_path: dist/KaproTUN-macOS-arm64.dmg
             shell: bash
           - os: ubuntu-latest
-            artifact_name: KaproVPN-Linux-x64.AppImage
+            artifact_name: KaproTUN-Linux-x64.AppImage
             # AppImage is the most distro-agnostic format. We package
             # the PyInstaller output into AppDir layout then run
             # appimagetool. The resulting .AppImage is one chmod +x
             # away from running on any glibc-2.31+ distro.
             build_cmd: |
-              python -m PyInstaller KaproVPN.spec --noconfirm --log-level WARN
+              python -m PyInstaller KaproTUN.spec --noconfirm --log-level WARN
               # AppDir layout per AppImage spec
               mkdir -p AppDir/usr/bin AppDir/usr/share/icons/hicolor/256x256/apps \
                        AppDir/usr/share/applications
-              cp dist/KaproVPN AppDir/usr/bin/kaprovpn
-              chmod +x AppDir/usr/bin/kaprovpn
-              cp kapro_vpn/data/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/kaprovpn.png
-              cp kapro_vpn/data/icon.png AppDir/kaprovpn.png  # root icon, AppImage requires it
-              cat > AppDir/kaprovpn.desktop <<'EOF'
+              cp dist/KaproTUN AppDir/usr/bin/kaprotun
+              chmod +x AppDir/usr/bin/kaprotun
+              cp kapro_tun/data/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/kaprotun.png
+              cp kapro_tun/data/icon.png AppDir/kaprotun.png  # root icon, AppImage requires it
+              cat > AppDir/kaprotun.desktop <<'EOF'
               [Desktop Entry]
               Type=Application
-              Name=KaproVPN
+              Name=KaproTUN
               Comment=VPN client with split routing
-              Exec=kaprovpn
-              Icon=kaprovpn
+              Exec=kaprotun
+              Icon=kaprotun
               Categories=Network;
               Terminal=false
               EOF
-              cp AppDir/kaprovpn.desktop AppDir/usr/share/applications/
+              cp AppDir/kaprotun.desktop AppDir/usr/share/applications/
               cat > AppDir/AppRun <<'EOF'
               #!/bin/bash
               HERE="$(dirname "$(readlink -f "${0}")")"
-              exec "${HERE}/usr/bin/kaprovpn" "$@"
+              exec "${HERE}/usr/bin/kaprotun" "$@"
               EOF
               chmod +x AppDir/AppRun
               # Fetch appimagetool once per build
@@ -130,8 +130,8 @@ jobs:
                 -O appimagetool
               chmod +x appimagetool
               ./appimagetool --appimage-extract
-              ARCH=x86_64 ./squashfs-root/AppRun AppDir dist/KaproVPN-Linux-x64.AppImage
-            payload_path: dist/KaproVPN-Linux-x64.AppImage
+              ARCH=x86_64 ./squashfs-root/AppRun AppDir dist/KaproTUN-Linux-x64.AppImage
+            payload_path: dist/KaproTUN-Linux-x64.AppImage
             shell: bash
 
     defaults:
@@ -210,9 +210,9 @@ jobs:
 
           | OS | Файл | Что делать |
           |----|------|-----------|
-          | Windows 10/11 (x64) | `KaproVPN-Setup.exe` | Запустить, пара кликов |
-          | macOS (Apple Silicon) | `KaproVPN-macOS-arm64.dmg` | Открыть DMG, перетащить в Applications |
-          | Linux (x64) | `KaproVPN-Linux-x64.AppImage` | `chmod +x` и запустить |
+          | Windows 10/11 (x64) | `KaproTUN-Setup.exe` | Запустить, пара кликов |
+          | macOS (Apple Silicon) | `KaproTUN-macOS-arm64.dmg` | Открыть DMG, перетащить в Applications |
+          | Linux (x64) | `KaproTUN-Linux-x64.AppImage` | `chmod +x` и запустить |
 
           Полный changelog: [CHANGELOG.md](../../blob/main/CHANGELOG.md)
 

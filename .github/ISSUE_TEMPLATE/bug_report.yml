@@ -1,5 +1,5 @@
 name: 🐞 Баг / Bug report
-description: Сообщить о проблеме в десктопном KaproVPN
+description: Сообщить о проблеме в десктопном KaproTUN
 labels: ["bug"]
 body:
   - type: markdown
@@ -7,11 +7,11 @@ body:
       value: |
         Спасибо за отчёт! Чем больше деталей — тем быстрее починим.
         Проблему безопасности (утечка, обход защиты) — **не сюда**, а в
-        [Security Policy](https://github.com/fafnirov/KaproVPN/security/policy).
+        [Security Policy](https://github.com/fafnirov/KaproTUN/security/policy).
   - type: input
     id: version
     attributes:
-      label: Версия KaproVPN
+      label: Версия KaproTUN
       description: Видно в окне «Установлен» или в заголовке установщика.
       placeholder: "например, 1.19.5"
     validations:
