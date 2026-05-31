@@ -387,22 +387,24 @@ class RouteSession:
             if rc == _NO_ERROR:
                 self.routes.append(_RouteEntry(dest, mask, gateway, if_index, metric))
                 added += 1
-            elif rc == _ERROR_ALREADY_EXISTS:
-                # Exact duplicate (same dest+mask+next_hop+proto) — ours from
-                # a prior session. Adopt it: track it so restore() deletes it.
-                # Native delete keys on dest+mask+next_hop, which all match,
-                # so cleanup at disconnect will find it.
+            elif rc in (_ERROR_ALREADY_EXISTS, _ERROR_OBJECT_ALREADY_EXISTS):
+                # Route already in the table — almost always ours, left over
+                # from a prior session that didn't get to clean up. Adopt it:
+                # track it so restore() removes it on disconnect. Fixes the
+                # cross-session leak (and the network-change blackhole).
+                #
+                # We accept BOTH 183 and 5010: Windows hands back one or the
+                # other for a duplicate depending on version, and measured in
+                # the field, CreateIpForwardEntry on this class of box returns
+                # 5010 even for an EXACT duplicate (8610/8611 geoip CIDRs in
+                # one capture). Treating 5010 as "dead adapter, delete+recreate"
+                # (as we do for the single server host-route in add_route) would
+                # be tens of seconds of per-route shell-outs here AND would flap
+                # split-routing on a live connection. Adopting is instant and
+                # non-disruptive; restore() has a shell-delete fallback for the
+                # rare genuinely-stale (different-ifIndex) entry.
                 self.routes.append(_RouteEntry(dest, mask, gateway, if_index, metric))
                 adopted += 1
-            elif rc == _ERROR_OBJECT_ALREADY_EXISTS:
-                # Same dest+mask but mismatched proto/ifIndex — typically a
-                # stale row pointing at a now-dead adapter. We can't trust its
-                # next-hop, so delete (the shell form matches by dest+mask
-                # regardless of proto) and recreate cleanly via OUR gateway.
-                delete_route(dest, mask)
-                if _create_route_native(dest, mask, gateway, if_index, metric) == _NO_ERROR:
-                    self.routes.append(_RouteEntry(dest, mask, gateway, if_index, metric))
-                    added += 1
             # else: genuinely invalid (bad gateway / metric below iface) —
             # nothing useful to do per-route, skip.
         return (added, adopted)
@@ -413,9 +415,26 @@ class RouteSession:
 
     def restore(self) -> None:
         # Reverse order so more-specific routes go away before any catchalls.
+        #
+        # Native delete keys on dest+mask+next_hop+ifIndex+proto — NOT metric.
+        # Every route we ADOPTED matched on exactly those fields (that's what
+        # made CreateIpForwardEntry report a duplicate), so native delete finds
+        # and removes it regardless of the metric we stored. That means the
+        # common case — including the user's metric-1 leftovers from an older
+        # build — cleans up fast with no shell-out.
+        #
+        # The shell fallback only covers a genuine native miss (e.g. a stale
+        # entry on a now-different adapter). It's CAPPED so a pathological run
+        # can never turn disconnect into thousands of route.exe spawns
+        # (~10 ms each); anything past the cap is left for the next session to
+        # re-adopt and clean.
+        shell_fallback_budget = 64
         for r in reversed(self.routes):
             try:
-                _delete_route_native(r.dest, r.mask, r.gateway, r.if_index, r.metric)
+                rc = _delete_route_native(r.dest, r.mask, r.gateway, r.if_index, r.metric)
+                if rc not in (_NO_ERROR, _ERROR_NOT_FOUND) and shell_fallback_budget > 0:
+                    shell_fallback_budget -= 1
+                    delete_route(r.dest, r.mask)
             except Exception:
                 pass
         self.routes.clear()

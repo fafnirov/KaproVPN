@@ -553,27 +553,40 @@ def _bypass_routes_adopt_leftovers() -> None:
     if _sys.platform != "win32":
         return  # CreateIpForwardEntry path is Windows-only
     from kapro_vpn.core import network_routes as _nr
-    orig = _nr._create_route_native
+    orig_create = _nr._create_route_native
+    orig_delete = _nr.delete_route
     try:
-        # Simulate every route already present (ERROR_ALREADY_EXISTS).
-        _nr._create_route_native = lambda *a, **k: _nr._ERROR_ALREADY_EXISTS
-        sess = _nr.RouteSession()
-        added, adopted = sess.add_bypass_cidrs(
-            [("8.8.8.8", "255.255.255.255"), ("1.1.1.1", "255.255.255.255")],
-            "192.168.1.1", 12, metric=26,
-        )
-        if (added, adopted) != (0, 2):
-            raise AssertionError(f"all-existing should give (0,2), got ({added},{adopted})")
-        if len(sess.routes) != 2:
-            raise AssertionError(f"adopted routes must be tracked for cleanup, got {len(sess.routes)}")
+        # BOTH already-exists codes must adopt (track for cleanup) WITHOUT
+        # shelling out. Windows returns 183 on some boxes, 5010 on others
+        # (the field captures that drove this returned 5010 even for exact
+        # dups) — v1.21.1 wrongly delete+recreated on 5010, which is tens of
+        # seconds of shell-outs for thousands of geoip CIDRs and flaps a live
+        # connection. v1.21.2 adopts both, fast and non-disruptive.
+        for label, code in (("ALREADY_EXISTS_183", _nr._ERROR_ALREADY_EXISTS),
+                            ("OBJECT_ALREADY_EXISTS_5010", _nr._ERROR_OBJECT_ALREADY_EXISTS)):
+            shell = {"n": 0}
+            _nr._create_route_native = (lambda c: (lambda *a, **k: c))(code)
+            _nr.delete_route = lambda *a, **k: (shell.update(n=shell["n"] + 1) or True)
+            sess = _nr.RouteSession()
+            added, adopted = sess.add_bypass_cidrs(
+                [("8.8.8.8", "255.255.255.255"), ("1.1.1.1", "255.255.255.255")],
+                "192.168.1.1", 17, metric=36,
+            )
+            if (added, adopted) != (0, 2):
+                raise AssertionError(f"{label}: expected (0,2), got ({added},{adopted})")
+            if len(sess.routes) != 2:
+                raise AssertionError(f"{label}: adopted routes must be tracked, got {len(sess.routes)}")
+            if shell["n"] != 0:
+                raise AssertionError(f"{label}: adopt must NOT shell-delete (got {shell['n']} calls)")
         # Fresh adds report as added, not adopted.
         _nr._create_route_native = lambda *a, **k: _nr._NO_ERROR
         sess2 = _nr.RouteSession()
-        a2, ad2 = sess2.add_bypass_cidrs([("9.9.9.9", "255.255.255.255")], "192.168.1.1", 12)
+        a2, ad2 = sess2.add_bypass_cidrs([("9.9.9.9", "255.255.255.255")], "192.168.1.1", 17)
         if (a2, ad2) != (1, 0):
             raise AssertionError(f"fresh add should give (1,0), got ({a2},{ad2})")
     finally:
-        _nr._create_route_native = orig
+        _nr._create_route_native = orig_create
+        _nr.delete_route = orig_delete
 
 
 check("bypass routes: adopt leftovers so disconnect cleans them",
