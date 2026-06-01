@@ -336,17 +336,22 @@ def build_config(
     cleaned = sorted({d.strip().lower() for d in direct_domains if d.strip()})
     dns_opt = dns_options.get(dns_option)
 
-    # Pick the upstream IP for the :53 hijack when leak protection is on.
-    # System option has no plain_servers of its own, so we fall back to
-    # Cloudflare — the most-used public resolver, fast, no logging.
-    # User who wants a different fallback can pick adguard/cloudflare/
-    # quad9 explicitly in Settings.
-    _LEAK_PROTECTION_FALLBACK = ("1.1.1.1", "1.0.0.1")
-    hijack_upstream = (
-        dns_opt.plain_servers[0]
+    # The upstream resolvers used when leak protection tunnels DNS. For a named
+    # option (adguard/cloudflare/quad9) it's that provider's plain IPs; for
+    # "System" it's the diverse Cloudflare+Google+Quad9 set (v2.1.5) — three
+    # operators so no single resolver being unreachable through the tunnel kills
+    # all resolution (the pre-v2.1.5 single-1.1.1.1 funnel was the SPOF behind
+    # "connected but nothing resolves").
+    leak_upstreams = (
+        list(dns_opt.plain_servers)
         if dns_opt.plain_servers
-        else _LEAK_PROTECTION_FALLBACK[0]
+        else list(dns_options.LEAK_PROTECTED_SYSTEM_UPSTREAMS)
     )
+    # dns-out (the :53 hijack re-resolver) takes a single address; the real
+    # failover lives in the routing carve-out + dns block below, which list all
+    # of leak_upstreams. This is just the first-choice for any :53 traffic that
+    # isn't aimed at one of the carved-through upstreams.
+    hijack_upstream = leak_upstreams[0]
 
     # `domain:foo.bar` in Xray matches foo.bar AND any *.foo.bar
     domain_rules = [f"domain:{d}" for d in cleaned]
@@ -386,7 +391,7 @@ def build_config(
         # through the tunnel (proxy) so they resolve directly — small UDP/53
         # over the tunnel returns in ~0.4s. App DNS to any OTHER address
         # still gets the leak-protection hijack below.
-        upstream_ips = list(dns_opt.plain_servers) or list(_LEAK_PROTECTION_FALLBACK)
+        upstream_ips = leak_upstreams
         rules.append({
             "type": "field",
             "ip": [f"{ip}/32" for ip in upstream_ips],
@@ -490,10 +495,24 @@ def build_config(
     # Privacy is unchanged from the user's ISP — the query is still inside
     # the encrypted tunnel; we only drop the (server-side) DoH leg. AdGuard's
     # plain IPs still filter ads, so the ad-block option keeps working.
+    # v2.1.5: give xray's built-in resolver an explicit, MULTI-server upstream
+    # list with failover whenever DNS is meant to ride the tunnel — for a named
+    # option (its plain IPs) and for "System" with leak protection on (the
+    # diverse fallback set). Listing several servers makes xray's own domain
+    # resolution (domainStrategy=IPIfNonMatch, used to match geoip/routing
+    # rules and to dial outbound hosts) fail over instead of dying on one dead
+    # resolver — a second cause of "connected but no traffic". For "System"
+    # with leak protection OFF we keep xray on the OS resolver (no dns block),
+    # exactly as before — no behavioural change for that path.
     dns_block: dict[str, Any] | None = None
     if dns_opt.plain_servers:
         dns_block = {
             "servers": list(dns_opt.plain_servers),
+            "queryStrategy": "UseIPv4",
+        }
+    elif dns_leak_protection:
+        dns_block = {
+            "servers": list(dns_options.LEAK_PROTECTED_SYSTEM_UPSTREAMS),
             "queryStrategy": "UseIPv4",
         }
 

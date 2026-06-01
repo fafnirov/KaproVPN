@@ -24,6 +24,7 @@ Design rules:
 from __future__ import annotations
 
 import socket
+import urllib.request
 # Import the executor eagerly (not via concurrent.futures.<attr> at first use).
 # concurrent.futures lazily imports its .thread submodule on first attribute
 # access, and that submodule calls threading._register_atexit() at import time —
@@ -94,4 +95,54 @@ def probe(timeout: float = 2.0, attempts: int = 2,
                 # _resolve_once already swallows everything, but stay paranoid:
                 # a probe must never escalate to an exception.
                 continue
+    return False
+
+
+# Small, always-on captive-portal endpoints that answer 204 No Content over
+# plain HTTP — tiny, no TLS-through-proxy CONNECT dance, and run by three
+# different operators so one being down doesn't read as a dead tunnel.
+_TUNNEL_PROBE_URLS = (
+    "http://cp.cloudflare.com/",
+    "http://www.gstatic.com/generate_204",
+    "http://connectivitycheck.gstatic.com/generate_204",
+)
+
+
+def http_probe(proxy_url: str, timeout: float = 3.0,
+               urls: tuple[str, ...] | None = None) -> bool:
+    """True if an HTTP request succeeds THROUGH `proxy_url`.
+
+    Unlike probe() (which exercises the OS resolver), this drives traffic
+    through xray's local HTTP inbound, so the request is resolved by xray's own
+    dns block and dialed over the proxy outbound — i.e. it tests the TUNNEL
+    itself (transport + xray-side DNS), independent of the machine's DNS state.
+    That makes it the liveness signal that still works when leak protection is
+    OFF (where OS DNS goes direct and proves nothing about the tunnel) and the
+    signal that turns a dead REALITY transport into a fast, clean connect
+    failure instead of a "connected but nothing works" limbo.
+
+    Returns True on the first 2xx/3xx (204 included). Never raises; worst-case
+    wall-clock is len(urls) * timeout, only paid when the tunnel is actually
+    dead. The proxy is reached over IPv4 loopback, so no resolution is needed
+    to talk to it.
+    """
+    targets = urls if urls else _TUNNEL_PROBE_URLS
+    try:
+        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        opener = urllib.request.build_opener(handler)
+    except Exception:
+        return False
+    for u in targets:
+        try:
+            req = urllib.request.Request(
+                u, method="GET",
+                headers={"User-Agent": "KaproTUN-healthprobe"})
+            with opener.open(req, timeout=max(0.2, timeout)) as resp:
+                code = getattr(resp, "status", None)
+                if code is None:
+                    code = resp.getcode()
+                if code is not None and 200 <= int(code) < 400:
+                    return True
+        except Exception:
+            continue
     return False

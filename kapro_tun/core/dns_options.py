@@ -31,6 +31,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+# Diverse public resolvers used for the "System" DNS option when leak
+# protection is ON — i.e. when DNS has to travel through the tunnel. THREE
+# DIFFERENT operators on three different anycast networks (Cloudflare, Google,
+# Quad9), deliberately, so that one provider being blocked / overloaded /
+# null-routed at the exit node can't take the whole machine's resolution down.
+# Before v2.1.5 the leak-protected "System" path funnelled everything to a
+# single Cloudflare IP — if 1.1.1.1 was unreachable through the tunnel, ALL
+# resolution died ("connected but nothing opens"). xray (its dns block + the
+# :53 carve-out) and the controller (the TUN adapter's resolver list) both
+# read this list, so the OS, xray's internal resolver, and the hijack all fail
+# over across the same three providers. None of these IPs sit inside the
+# always-bypassed RU service blocks, so they tunnel cleanly without conflicting
+# with those routes.
+LEAK_PROTECTED_SYSTEM_UPSTREAMS: list[str] = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
+
+
 @dataclass(frozen=True)
 class DnsOption:
     key: str                       # stable id stored in settings.json

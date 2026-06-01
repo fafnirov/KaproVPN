@@ -43,20 +43,28 @@ MODE_TUN = "tun"           # System-wide TUN tunnel. Needs admin. Works for all 
 TUN_LOCAL_ADDR = "10.255.0.2"
 TUN_GATEWAY = "10.255.0.1"
 TUN_MASK = "255.255.255.0"
-# Yandex DNS first (Russian, fast for ru-sites, supports DoH), Cloudflare fallback.
-# These are also explicitly bypassed below so the queries themselves don't loop
-# through the tunnel.
+# TUN-adapter resolvers when leak protection is OFF — DNS goes DIRECT, so a
+# Russian-fast resolver first (Yandex), Cloudflare as fallback. These are also
+# in _DNS_RESOLVER_BYPASS so the queries leave via the physical NIC. When leak
+# protection is ON we DON'T use this list (see _LEAK_PROTECTED_TUN_DNS): DNS
+# must tunnel, so we use diverse upstreams that are NOT bypassed.
 TUN_DNS = ["77.88.8.8", "1.1.1.1"]
 
-# Bypass these IPs unconditionally — DNS resolvers, plus the big Russian
-# service-provider blocks. Without this, anything that tries to resolve a
-# domain via DoH (Yandex Browser does this by default) gets routed through
-# our VLESS server, the DoH endpoint sees a Hostkey IP, may rate-limit or
-# refuse, and the browser reports ERR_NAME_NOT_RESOLVED.
-#
+# TUN-adapter resolvers when leak protection is ON — DNS rides the tunnel, so
+# these MUST be servers we deliberately route through it (via xray's :53
+# carve-out), NOT bypassed. Three different operators (Cloudflare/Google/Quad9)
+# for failover; same list xray's dns block + carve-out use, so the OS and xray
+# agree. None sit inside the always-bypassed RU service blocks below.
+_LEAK_PROTECTED_TUN_DNS = list(dns_options.LEAK_PROTECTED_SYSTEM_UPSTREAMS)
+
+# Public DNS-resolver host routes. Pinning these to the physical NIC means DNS
+# queries to them go DIRECT — correct ONLY when leak protection is OFF. With
+# leak protection ON these MUST NOT be installed: a /32 here would send the
+# OS's plaintext UDP/53 query straight out the physical NIC (an ISP-visible DNS
+# leak that defeats the whole feature) and would also steal the queries away
+# from the tunnelled carve-out. So this set is now applied conditionally.
 # Each entry: (dest_or_network, mask). For a /32 host-route use 255.255.255.255.
-_ALWAYS_BYPASS: list[tuple[str, str]] = [
-    # --- Public DNS resolvers ---
+_DNS_RESOLVER_BYPASS: list[tuple[str, str]] = [
     ("77.88.8.8",  "255.255.255.255"),  # Yandex Public DNS (basic)
     ("77.88.8.1",  "255.255.255.255"),  # Yandex Public DNS (basic, secondary)
     ("77.88.8.88", "255.255.255.255"),  # Yandex Safe DNS
@@ -65,12 +73,20 @@ _ALWAYS_BYPASS: list[tuple[str, str]] = [
     ("1.0.0.1",    "255.255.255.255"),  # Cloudflare secondary
     ("8.8.8.8",    "255.255.255.255"),  # Google
     ("8.8.4.4",    "255.255.255.255"),  # Google secondary
+]
 
-    # --- Yandex service blocks (AS13238) — covers DoH, search, maps, mail,
-    # disk, music, taxi, eda, yastatic, etc.
+# Big Russian service-provider blocks (Yandex / VK / Mail.ru / CDN). Routing
+# these direct keeps RU services reachable from a Russian IP and off the
+# tunnel. Applied in BOTH leak modes — none of these ranges contain the
+# leak-protected upstreams (1.1.1.1 / 8.8.8.8 / 9.9.9.9), so they don't clash
+# with tunnelled DNS. (Note: 77.88.0.0/18 DOES contain Yandex DNS, which is why
+# the leak-protected resolver set above deliberately avoids Yandex IPs.)
+_SERVICE_BYPASS: list[tuple[str, str]] = [
+    # --- Yandex service blocks (AS13238) — DoH, search, maps, mail, disk,
+    # music, taxi, eda, yastatic, etc.
     ("5.45.192.0",     "255.255.248.0"),  # /21
     ("5.255.192.0",    "255.255.240.0"),  # /20
-    ("77.88.0.0",      "255.255.192.0"),  # /18  (DNS lives in here)
+    ("77.88.0.0",      "255.255.192.0"),  # /18  (Yandex DNS lives in here)
     ("87.250.224.0",   "255.255.224.0"),  # /19
     ("93.158.128.0",   "255.255.128.0"),  # /17
     ("178.154.128.0",  "255.255.128.0"),  # /17
@@ -84,6 +100,10 @@ _ALWAYS_BYPASS: list[tuple[str, str]] = [
     # --- yastatic.net / yandexcloud (Yandex CDN, different AS) ---
     ("213.180.193.0",  "255.255.255.0"),  # /24
 ]
+
+# Back-compat alias — the full unconditional set (used only in the
+# leak-protection-OFF path, where direct DNS is intended).
+_ALWAYS_BYPASS: list[tuple[str, str]] = _DNS_RESOLVER_BYPASS + _SERVICE_BYPASS
 
 
 class ConnectionManager:
@@ -451,6 +471,10 @@ class ConnectionManager:
         hy_port = self._maybe_start_hysteria(config)
         self._write_and_check(config, direct_domains, host, port,
                               hysteria_socks_port=hy_port)
+        # Remember where xray's error log ends right now, so the connect-time
+        # liveness check can scan ONLY this session's lines for REALITY/transport
+        # failures (the log is appended across runs). v2.1.5.
+        log_offset = self._xray_log_size()
         self._start_xray()
         # Arm kill-switch before tun2socks comes up — same reasoning as
         # _connect_http: firewall block must exist before any traffic
@@ -557,81 +581,47 @@ class ConnectionManager:
                     + hint
                 )
 
-            # Bypass DNS resolvers + big Russian service blocks (Yandex/VK
-            # ranges) so DoH and CDN traffic doesn't loop through the tunnel.
-            # If the user picked a non-system DNS in Settings, splice its IPs
-            # in too — otherwise their DoH-over-port-443 would tunnel through
-            # the VPN server uselessly (and the provider would see the VPN's
-            # IP, not the user's).
+            # Bypass routes — what stays OFF the tunnel and goes direct.
+            #
+            # v2.1.5 fixes a real conflict: the public DNS-resolver host-routes
+            # used to be installed UNCONDITIONALLY. With leak protection ON that
+            # meant the OS's :53 query to e.g. 1.1.1.1 left in plaintext via the
+            # physical NIC — an ISP-visible DNS leak — AND it stole the query
+            # from the tunnelled carve-out. So:
+            #   leak ON  -> only the RU service blocks go direct; the resolvers
+            #               are NOT bypassed (DNS rides the tunnel, no leak).
+            #   leak OFF -> legacy: resolvers + service blocks + the chosen
+            #               option's IPs all go direct (DNS is meant to be
+            #               direct in this mode — no behaviour change).
             dns_opt = dns_options.get(str(self.settings.get("dns_option", "system")))
-            bypass_list: list[tuple[str, str]] = list(_ALWAYS_BYPASS)
-            existing_ips = {entry[0] for entry in bypass_list}
-            for ip in dns_opt.bypass_ips:
-                if ip not in existing_ips:
-                    bypass_list.append((ip, "255.255.255.255"))
+            leak = bool(self.settings.get("dns_leak_protection", True))
+            if leak:
+                bypass_list: list[tuple[str, str]] = list(_SERVICE_BYPASS)
+                self._log("[*] Защита DNS включена: публичные резолверы НЕ "
+                          "байпасятся — DNS идёт в туннель (без утечки на ISP).")
+            else:
+                bypass_list = list(_ALWAYS_BYPASS)
+                existing_ips = {entry[0] for entry in bypass_list}
+                for ip in dns_opt.bypass_ips:
+                    if ip not in existing_ips:
+                        bypass_list.append((ip, "255.255.255.255"))
             added_always, adopted_always = session.add_bypass_cidrs(
                 bypass_list, real.gateway, real.index, metric=bypass_metric,
             )
-            self._log(f"[*] Always-bypass роуты (DNS + Yandex/VK): {added_always} новых"
+            self._log(f"[*] Bypass-роуты ({'сервисы РФ' if leak else 'DNS + сервисы РФ'}): "
+                      f"{added_always} новых"
                       + (f", {adopted_always} уже было (подхвачены для очистки)"
                          if adopted_always else ""))
 
-            # Default route through TUN. Two /1 routes beat the existing
-            # 0.0.0.0/0 by being more specific, so we use those instead of
-            # touching the system default. Metric must be >= TUN interface's
-            # own metric for the same reason as above.
-            tun_metric = network_routes._get_interface_metric_v4(tun.index) + 1
-            if not session.add_route("0.0.0.0", "128.0.0.0", TUN_GATEWAY, tun.index, metric=tun_metric):
-                raise ConnectionError("Не удалось добавить маршрут 0.0.0.0/1 через TUN.")
-            if not session.add_route("128.0.0.0", "128.0.0.0", TUN_GATEWAY, tun.index, metric=tun_metric):
-                raise ConnectionError("Не удалось добавить маршрут 128.0.0.0/1 через TUN.")
-
-            # DNS via TUN so resolution doesn't leak to ISP. If the user
-            # picked a non-system DNS, use its plain IPv4 servers here so
-            # the TUN adapter's resolver matches what xray uses internally;
-            # otherwise fall back to the safe Yandex+Cloudflare default.
-            tun_dns_servers = dns_opt.plain_servers if dns_opt.plain_servers else TUN_DNS
-            session.set_dns(tun.name, tun_dns_servers)
-
-            # v1.16.7 / v1.16.8: silence the physical NIC's DNS to prevent
-            # Windows' Smart Multi-Homed Name Resolution from parallel-
-            # querying the DHCP-assigned ISP DNS (MGTS / Beeline / etc)
-            # alongside our TUN DNS. With physical NIC's DNS cleared,
-            # the only DNS Windows can use is TUN's — which routes
-            # through xray → hijack → upstream over VPN.
-            #
-            # Tied to the dns_leak_protection toggle (v1.16.8), not the
-            # DNS option. User who turns protection OFF — usually because
-            # they need Pi-hole / corporate / locally-pinned DNS to
-            # actually answer — keeps the physical NIC's DNS intact.
-            #
-            # Session tracks the change so disconnect's cleanup restores
-            # DHCP-source DNS automatically.
-            dns_cleared = bool(self.settings.get("dns_leak_protection", True))
-            if dns_cleared:
-                # Journal the interface BEFORE we clear its DNS, so a crash
-                # while connected can be undone on the next startup (recover()
-                # restores DHCP). Best-effort: a failed journal write still
-                # lets the connect proceed (the in-session health-check below
-                # and disconnect's restore() remain the primary safety nets).
-                if not tun_recovery.mark(real.name, real.index):
-                    self._log("[!] Не удалось записать журнал восстановления TUN "
-                              "(восстановление после аварийного выхода может не "
-                              "сработать) — продолжаю.")
-                session.set_dns(real.name, [])  # empty = clear via address=none
-                self._log(f"[*] DNS на физическом интерфейсе «{real.name}» "
-                          f"(ifIndex {real.index}) очищен — все запросы пойдут "
-                          f"через TUN → DoH-upstream через VPN.")
-
-            # Split-routing in TUN mode: xray's freedom outbound can't be
-            # trusted alone because its outgoing packets still hit the kernel
-            # routing table, which currently sends everything to TUN — that
-            # means freedom -> TCP -> kernel -> TUN -> tun2socks -> xray ->
-            # freedom -> ... infinite loop, manifesting as a connection
-            # timeout to the user. The fix is the same trick AmneziaVPN uses:
-            # resolve every direct-list domain and pin /32 bypass routes for
-            # the resulting IPs via the real gateway. The kernel then dodges
-            # the TUN entirely for that traffic.
+            # Direct-list bypass routes — resolve the curated direct domains and
+            # pin /32 routes for their IPs via the real gateway, so that traffic
+            # dodges the TUN (the same AmneziaVPN trick; also breaks the
+            # freedom->kernel->TUN->xray->freedom loop). v2.1.5: do this NOW,
+            # while the default route is still the physical NIC, so resolution
+            # uses the real (direct) DNS path — NOT after the /1 TUN routes flip
+            # the default, which (with leak protection's resolvers no longer
+            # bypassed) would force this resolution through the tunnel and make
+            # it fail whenever the tunnel is slow to warm up.
             if direct_domains:
                 self._log(f"[*] Резолвлю {len(direct_domains)} доменов из списка direct…")
                 domain_ips = network_routes.resolve_domains_parallel(direct_domains)
@@ -647,31 +637,86 @@ class ConnectionManager:
                 self._log(f"[*] Bypass-роуты для direct-доменов: {added} новых"
                           + (f", {adopted} уже было (подхвачены)" if adopted else ""))
 
+            # Default route through TUN. Two /1 routes beat the existing
+            # 0.0.0.0/0 by being more specific, so we use those instead of
+            # touching the system default. Metric must be >= TUN interface's
+            # own metric for the same reason as above. AFTER this the default
+            # egress is the tunnel, so anything resolved/added above had to
+            # happen first.
+            tun_metric = network_routes._get_interface_metric_v4(tun.index) + 1
+            if not session.add_route("0.0.0.0", "128.0.0.0", TUN_GATEWAY, tun.index, metric=tun_metric):
+                raise ConnectionError("Не удалось добавить маршрут 0.0.0.0/1 через TUN.")
+            if not session.add_route("128.0.0.0", "128.0.0.0", TUN_GATEWAY, tun.index, metric=tun_metric):
+                raise ConnectionError("Не удалось добавить маршрут 128.0.0.0/1 через TUN.")
+
+            # DNS on the TUN adapter. Match what xray uses internally:
+            #   - named option  -> its plain IPv4 servers (both leak modes)
+            #   - system + leak -> the diverse tunnelled upstreams (3 operators,
+            #     failover; NOT bypassed, so they ride the tunnel)
+            #   - system + no   -> the legacy Yandex+Cloudflare direct default
+            # Listing several servers lets the OS resolver itself fail over
+            # between them, so one provider being unreachable doesn't kill
+            # resolution — the core of the "no single-DNS dependency" fix.
+            if dns_opt.plain_servers:
+                tun_dns_servers = list(dns_opt.plain_servers)
+            elif leak:
+                tun_dns_servers = list(_LEAK_PROTECTED_TUN_DNS)
+            else:
+                tun_dns_servers = list(TUN_DNS)
+            session.set_dns(tun.name, tun_dns_servers)
+            self._log("[*] DNS на TUN-адаптере: " + ", ".join(tun_dns_servers)
+                      + (" (через туннель, с failover)" if leak else " (прямой)"))
+
+            # v1.16.7 / v1.16.8: silence the physical NIC's DNS to prevent
+            # Windows' Smart Multi-Homed Name Resolution from parallel-
+            # querying the DHCP-assigned ISP DNS (MGTS / Beeline / etc)
+            # alongside our TUN DNS. With physical NIC's DNS cleared,
+            # the only DNS Windows can use is TUN's — which routes
+            # through xray → hijack → upstream over VPN.
+            #
+            # Tied to the dns_leak_protection toggle (v1.16.8), not the
+            # DNS option. User who turns protection OFF — usually because
+            # they need Pi-hole / corporate / locally-pinned DNS to
+            # actually answer — keeps the physical NIC's DNS intact.
+            #
+            # Session tracks the change so disconnect's cleanup restores
+            # DHCP-source DNS automatically.
+            dns_cleared = leak  # same dns_leak_protection axis, computed above
+            if dns_cleared:
+                # Journal the interface BEFORE we clear its DNS, so a crash
+                # while connected can be undone on the next startup (recover()
+                # restores DHCP). Best-effort: a failed journal write still
+                # lets the connect proceed (the in-session health-check below
+                # and disconnect's restore() remain the primary safety nets).
+                if not tun_recovery.mark(real.name, real.index):
+                    self._log("[!] Не удалось записать журнал восстановления TUN "
+                              "(восстановление после аварийного выхода может не "
+                              "сработать) — продолжаю.")
+                session.set_dns(real.name, [])  # empty = clear via address=none
+                self._log(f"[*] DNS на физическом интерфейсе «{real.name}» "
+                          f"(ifIndex {real.index}) очищен — все запросы пойдут "
+                          f"через TUN → DoH-upstream через VPN.")
+
+            # (Direct-list bypass routes are installed earlier — before the /1
+            # TUN routes — so resolution happens over the still-direct path.)
+
             # geoip:ru kernel bypass — gated on route_ru_direct. Extracted to
             # _install_geoip_ru_bypass so the gating is unit-testable without a
             # live TUN session. The curated direct-domain routes above are
             # independent and always applied.
             self._install_geoip_ru_bypass(session, real, bypass_metric)
 
-            # Safer DNS transition (v2.1.4): we just cleared the physical NIC's
-            # DNS, so the ONLY working resolver path is now through the TUN. If
-            # the tunnel is up but its DNS is dead (bad server, blocked :53,
-            # half-open hysteria), the user would land in the worst state —
-            # "connected" but unable to resolve anything, with their real DNS
-            # already wiped. Verify the TUN DNS path actually answers before we
-            # commit; if it doesn't, fall through to the except below which
-            # restores DNS/routes/proxy and tears down the processes, surfacing
-            # a clear error instead of a silently-broken connection.
-            if dns_cleared:
-                self._log("[*] Проверяю, что DNS поднимается через TUN…")
-                if not dns_health.probe(timeout=1.5, attempts=3):
-                    raise ConnectionError(
-                        "TUN поднялся, но DNS через туннель не отвечает. "
-                        "Откатываю изменения (DNS/маршруты восстановлены), "
-                        "чтобы не оставить интернет без резолвинга. Проверь "
-                        "сервер/подписку и попробуй снова."
-                    )
-                self._log("[*] DNS через TUN работает — соединение готово.")
+            # Liveness gate (v2.1.4 → strengthened v2.1.5). Starting the
+            # processes is NOT proof the tunnel carries traffic: REALITY can be
+            # failing its handshake (the "received real certificate" errors),
+            # the server can be down, or the upstream DNS unreachable. With the
+            # physical DNS cleared, that lands the user in the worst state —
+            # "connected" but nothing resolves. Verify the tunnel is REALLY
+            # alive before committing; on failure, fall through to the except
+            # below (restores DNS/routes/proxy, stops the processes, clears the
+            # journal) and surface a specific, actionable error instead of a
+            # silently-broken connection. Runs in BOTH leak modes now.
+            self._verify_tunnel_or_raise(host, port, dns_cleared, log_offset)
         except Exception:
             session.restore()
             # DNS/routes are back; the recovery journal would otherwise make the
@@ -730,6 +775,86 @@ class ConnectionManager:
             self.process.start(str(xray_config.paths.runtime_config_file()))
         except Exception as e:
             raise ConnectionError(f"Не удалось запустить Xray: {e}") from e
+
+    # --- connect-time liveness (v2.1.5) ----------------------------------
+
+    def _xray_log_size(self) -> int:
+        """Current byte-size of xray's error log (0 if absent). Captured before
+        start so the REALITY scan reads only this session's lines."""
+        try:
+            return int(paths.log_file().stat().st_size)
+        except Exception:
+            return 0
+
+    def _scan_xray_reality_errors(self, offset: int) -> int:
+        """Count REALITY 'received real certificate' failures logged since
+        `offset`. A working REALITY transport never logs this; a burst means
+        the handshake is failing (stale pbk/sid/sni, server changed, or active
+        MITM) — the tunnel can't carry traffic. Reads only bytes appended after
+        `offset` (tolerant of truncation). Never raises."""
+        try:
+            p = paths.log_file()
+            size = int(p.stat().st_size)
+            start = offset if (isinstance(offset, int) and 0 <= offset <= size) else 0
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(start)
+                text = fh.read()
+        except Exception:
+            return 0
+        return text.lower().count("received real certificate")
+
+    def _verify_tunnel_or_raise(self, host: str, port: int,
+                                dns_cleared: bool, log_offset: int) -> None:
+        """Confirm the tunnel actually carries traffic; raise (→ rollback) if
+        not, with a message that names the real cause.
+
+        Two independent signals:
+          * http_probe — an HTTP request through xray's local inbound, i.e.
+            xray-side DNS + the proxy transport. Works in BOTH leak modes and
+            is the primary "is REALITY alive" test.
+          * dns probe — OS-level resolution. Only meaningful when leak
+            protection cleared the physical DNS (then it proves the full
+            OS→TUN→xray→tunnel path the user's apps depend on).
+
+        Alive criterion: leak ON → OS resolution must work (apps need it);
+        leak OFF → the tunnel transport must work. On failure we scan xray's
+        log for REALITY errors to distinguish a broken obfuscated transport
+        from a plain dead server / dead DNS, and raise the matching message.
+        """
+        self._log("[*] Проверяю, что туннель реально живой (не только процессы)…")
+        proxy_url = f"http://{host}:{port}"
+        http_ok = dns_health.http_probe(proxy_url, timeout=2.5)
+        dns_ok = dns_health.probe(timeout=1.5, attempts=2) if dns_cleared else None
+
+        alive = bool(dns_ok) if dns_cleared else http_ok
+        if alive:
+            self._log("[*] Туннель живой — трафик проходит"
+                      + (", DNS резолвится." if dns_cleared else "."))
+            return
+
+        reality = self._scan_xray_reality_errors(log_offset)
+        if reality:
+            raise ConnectionError(
+                "Транспорт REALITY не проходит рукопожатие — сервер отдаёт "
+                f"настоящий TLS-сертификат вместо маскировки ({reality} таких "
+                "ошибок в логе). Обычно это значит, что параметры (pbk/sid/sni) "
+                "устарели, сервер сменили или соединение перехватывают. "
+                "Подключение отменено, сеть восстановлена — обнови "
+                "подписку/конфиг и попробуй снова."
+            )
+        if not http_ok:
+            raise ConnectionError(
+                "Туннель поднялся, но трафик через него не проходит (проверка "
+                "соединения и DNS не ответили). Сервер недоступен или "
+                "блокируется. Подключение отменено, сеть восстановлена — "
+                "проверь сервер/подписку и попробуй снова."
+            )
+        raise ConnectionError(
+            "Туннель работает, но системный DNS через TUN не поднялся — "
+            "резолвинг не отвечает. Подключение отменено, сеть восстановлена. "
+            "Если повторяется — попробуй другой сервер или временно отключи "
+            "«Защиту от DNS-утечек»."
+        )
 
     def _maybe_arm_killswitch(self) -> None:
         """If user enabled kill-switch in settings, install firewall rules.

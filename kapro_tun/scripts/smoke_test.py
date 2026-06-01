@@ -3565,20 +3565,28 @@ def _connect_tun_has_dns_rollback_wiring() -> None:
     src = inspect.getsource(ConnectionManager._connect_tun)
     mark_i = src.find("tun_recovery.mark(")
     clear_dns_i = src.find("session.set_dns(real.name, [])")
-    probe_i = src.find("dns_health.probe(")
-    raise_i = src.find("raise ConnectionError(")
+    # v2.1.5: the DNS health-check moved into _verify_tunnel_or_raise, which
+    # _connect_tun calls as its commit-time liveness gate.
+    verify_i = src.find("_verify_tunnel_or_raise(")
     if mark_i < 0:
         raise AssertionError("_connect_tun does not journal the interface (mark)")
     if clear_dns_i < 0:
         raise AssertionError("_connect_tun no longer clears physical DNS?")
     if not (0 <= mark_i < clear_dns_i):
         raise AssertionError("journal mark() must precede the DNS clear")
-    if probe_i < 0 or raise_i < 0:
-        raise AssertionError("_connect_tun missing DNS health-check + rollback raise")
-    if not (clear_dns_i < probe_i):
-        raise AssertionError("health-check must run AFTER the DNS clear")
+    if verify_i < 0:
+        raise AssertionError("_connect_tun missing the liveness gate call")
+    if not (clear_dns_i < verify_i):
+        raise AssertionError("liveness gate must run AFTER the DNS clear")
 
-    exc_src = src[src.find("except Exception"):]
+    # The gate itself must probe AND raise on failure (so the except rolls back).
+    gate = inspect.getsource(ConnectionManager._verify_tunnel_or_raise)
+    if "dns_health.probe(" not in gate or "dns_health.http_probe(" not in gate:
+        raise AssertionError("_verify_tunnel_or_raise lost a liveness probe")
+    if "raise ConnectionError(" not in gate:
+        raise AssertionError("_verify_tunnel_or_raise must raise on a dead tunnel")
+
+    exc_src = src[src.rfind("except Exception"):]
     if "session.restore()" not in exc_src or "tun_recovery.clear()" not in exc_src:
         raise AssertionError("rollback path must restore() and clear the journal")
 
@@ -3686,6 +3694,202 @@ def _ps_forces_utf8_output() -> None:
 
 check("network_routes._ps: forces UTF-8 (fixes garbled iface names)",
       _ps_forces_utf8_output)
+
+
+# ---------------------------------------------------------------------------
+# Test — TUN DNS resilience (v2.1.5)
+#   A no single-DNS dependency · B no leak/bypass conflict ·
+#   C transport/REALITY fail-fast · invariant: failure rolls back cleanly
+# ---------------------------------------------------------------------------
+
+section("TUN DNS resilience — failover / bypass / fail-fast")
+
+
+def _no_single_dns_dependency() -> None:
+    """A: with leak protection ON, system DNS must NOT hinge on one resolver.
+    The upstream set, xray's dns block, and the :53 carve-out must all list
+    several servers from MORE THAN ONE operator (distinct /8s)."""
+    from kapro_tun.core import dns_options, xray_config
+    from kapro_tun.core.parser import parse
+
+    ups = dns_options.LEAK_PROTECTED_SYSTEM_UPSTREAMS
+    if len(ups) < 3:
+        raise AssertionError(f"need >=3 leak-protected upstreams, got {ups}")
+    first_octets = {ip.split(".")[0] for ip in ups}
+    if len(first_octets) < 3:
+        raise AssertionError(f"upstreams not operator-diverse: {ups}")
+
+    cfg = parse("vless://aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa@1.2.3.4:443"
+                "?type=tcp&security=reality&pbk=AAAA&sid=01&fp=chrome#T")
+    c = xray_config.build_config(cfg, [], dns_option="system",
+                                 dns_leak_protection=True)
+    dns_block = c.get("dns") or {}
+    servers = list(dns_block.get("servers") or [])
+    if len(servers) < 3 or set(servers) != set(ups):
+        raise AssertionError(f"system+leak dns block not multi-upstream: {servers}")
+
+    carve = [r for r in c["routing"]["rules"]
+             if r.get("port") == "53" and r.get("outboundTag") == "proxy"]
+    if not carve:
+        raise AssertionError("no :53→proxy carve-out for the upstreams")
+    carved_ips = {ip.split("/")[0] for r in carve for ip in r.get("ip", [])}
+    if not set(ups).issubset(carved_ips):
+        raise AssertionError(f"carve-out misses some upstreams: {carved_ips}")
+
+
+check("A: system+leak DNS has no single-resolver dependency",
+      _no_single_dns_dependency)
+
+
+def _leak_on_does_not_bypass_resolvers() -> None:
+    """B: the bypass/leak conflict is gone. The public resolvers live in a
+    separate list that is NOT applied when leak protection is on, and none of
+    the tunnelled upstreams fall inside an always-direct service block (which
+    would silently steal their queries back out the physical NIC)."""
+    import ipaddress
+    from kapro_tun.core import controller, dns_options
+
+    # Split is exhaustive and the alias is the union (no entry lost/dup'd).
+    if controller._ALWAYS_BYPASS != controller._DNS_RESOLVER_BYPASS + controller._SERVICE_BYPASS:
+        raise AssertionError("_ALWAYS_BYPASS != resolver-bypass + service-bypass")
+
+    # The public DNS resolvers must be ONLY in the resolver-bypass set (the one
+    # we skip when leak protection is on), never in the always-on service set.
+    resolver_ips = {e[0] for e in controller._DNS_RESOLVER_BYPASS}
+    service_ips = {e[0] for e in controller._SERVICE_BYPASS}
+    if resolver_ips & service_ips:
+        raise AssertionError("a resolver IP leaked into the always-on service bypass")
+
+    # Critical non-overlap: no tunnelled upstream may sit inside a service CIDR.
+    service_nets = [ipaddress.ip_network(f"{net}/{mask}")
+                    for (net, mask) in controller._SERVICE_BYPASS]
+    for up in dns_options.LEAK_PROTECTED_SYSTEM_UPSTREAMS:
+        a = ipaddress.ip_address(up)
+        for net in service_nets:
+            if a in net:
+                raise AssertionError(
+                    f"leak-protected upstream {up} sits inside always-bypassed "
+                    f"{net} — its DNS would leak direct out the physical NIC")
+
+    # Source-level: _connect_tun must choose the service-only set when leak on.
+    import inspect
+    src = inspect.getsource(controller.ConnectionManager._connect_tun)
+    if "list(_SERVICE_BYPASS)" not in src or "list(_ALWAYS_BYPASS)" not in src:
+        raise AssertionError("_connect_tun no longer branches bypass on leak mode")
+
+
+check("B: leak-protection ON does not bypass DNS resolvers (no leak/conflict)",
+      _leak_on_does_not_bypass_resolvers)
+
+
+def _http_probe_is_bounded_and_safe() -> None:
+    """C: the tunnel-liveness probe never raises and fails fast against a dead
+    proxy (so a broken transport becomes a clean connect failure, not a hang)."""
+    import time as _t
+    from kapro_tun.core import dns_health
+
+    t0 = _t.time()
+    r = dns_health.http_probe("http://127.0.0.1:1", timeout=1.0,
+                              urls=("http://127.0.0.1:9/",))
+    dt = _t.time() - t0
+    if r is not False:
+        raise AssertionError("http_probe to a dead proxy should be False")
+    if dt > 6.0:
+        raise AssertionError(f"http_probe not bounded ({dt:.1f}s)")
+    # Never raises on junk input either.
+    for bad in ("", "not-a-url", "http://"):
+        if not isinstance(dns_health.http_probe(bad, timeout=0.5,
+                                                urls=("http://127.0.0.1:9/",)), bool):
+            raise AssertionError(f"http_probe({bad!r}) returned non-bool")
+
+
+check("C: dns_health.http_probe bounded + never raises", _http_probe_is_bounded_and_safe)
+
+
+def _dead_tunnel_connect_rolls_back() -> None:
+    """Invariant 2+3: when the tunnel is dead, the connect-time liveness check
+    RAISES (which the _connect_tun except turns into a full DNS/route/proxy
+    rollback) — it never leaves the machine 'connected but DNS broken'. Also
+    checks the REALITY path produces its specific message, and that a live
+    tunnel passes."""
+    from kapro_tun.core import dns_health
+    # NB: the controller defines its OWN ConnectionError (not the builtin), so
+    # import that exact class to catch the rollback-triggering raise.
+    from kapro_tun.core.controller import ConnectionManager, ConnectionError
+
+    mgr = ConnectionManager(on_log=lambda _l: None)
+    orig_http, orig_probe = dns_health.http_probe, dns_health.probe
+    orig_scan = mgr._scan_xray_reality_errors
+    try:
+        # (a) everything dead, no REALITY markers → generic transport rollback.
+        dns_health.http_probe = lambda *a, **k: False
+        dns_health.probe = lambda *a, **k: False
+        mgr._scan_xray_reality_errors = lambda _off: 0
+        raised = None
+        try:
+            mgr._verify_tunnel_or_raise("127.0.0.1", 2080, dns_cleared=True, log_offset=0)
+        except ConnectionError as e:
+            raised = str(e)
+        if raised is None:
+            raise AssertionError("dead tunnel did not raise (no rollback would fire)")
+        if "восстановлена" not in raised:
+            raise AssertionError("rollback message doesn't state the network is restored")
+
+        # (b) dead + REALITY cert errors → REALITY-specific message.
+        mgr._scan_xray_reality_errors = lambda _off: 3
+        try:
+            mgr._verify_tunnel_or_raise("127.0.0.1", 2080, dns_cleared=False, log_offset=0)
+            raise AssertionError("dead REALITY transport did not raise")
+        except ConnectionError as e:
+            if "REALITY" not in str(e):
+                raise AssertionError(f"REALITY error not surfaced: {e}")
+
+        # (c) live tunnel (OS DNS resolves) → no raise, commit proceeds.
+        dns_health.http_probe = lambda *a, **k: True
+        dns_health.probe = lambda *a, **k: True
+        mgr._scan_xray_reality_errors = lambda _off: 0
+        mgr._verify_tunnel_or_raise("127.0.0.1", 2080, dns_cleared=True, log_offset=0)
+    finally:
+        dns_health.http_probe, dns_health.probe = orig_http, orig_probe
+        mgr._scan_xray_reality_errors = orig_scan
+
+    # Source invariant: the except still restores routes AND clears the journal.
+    import inspect
+    src = inspect.getsource(ConnectionManager._connect_tun)
+    exc = src[src.rfind("except Exception"):]
+    if "session.restore()" not in exc or "tun_recovery.clear()" not in exc:
+        raise AssertionError("rollback path lost restore()/journal-clear")
+    if "_verify_tunnel_or_raise(" not in src:
+        raise AssertionError("_connect_tun no longer runs the liveness gate")
+
+
+check("invariant: dead tunnel -> liveness raises -> clean rollback",
+      _dead_tunnel_connect_rolls_back)
+
+
+def _no_regression_leak_off() -> None:
+    """Invariant 4: leak protection OFF is unchanged — no xray dns block for
+    the system option (xray keeps using the OS resolver), and DNS still goes
+    direct via the full unconditional bypass set."""
+    from kapro_tun.core import xray_config, controller
+    from kapro_tun.core.parser import parse
+    cfg = parse("vless://aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa@1.2.3.4:443"
+                "?type=tcp&security=reality&pbk=AAAA&sid=01&fp=chrome#T")
+    c = xray_config.build_config(cfg, [], dns_option="system",
+                                 dns_leak_protection=False)
+    if c.get("dns") is not None:
+        raise AssertionError("system+leak-OFF should have NO dns block (regression)")
+    # :53 still routed direct in leak-off mode.
+    direct53 = [r for r in c["routing"]["rules"]
+                if r.get("port") == "53" and r.get("outboundTag") == "direct"]
+    if not direct53:
+        raise AssertionError("leak-off lost its direct :53 routing")
+    # The resolver host-routes are still available for the off-path bypass.
+    if not controller._DNS_RESOLVER_BYPASS:
+        raise AssertionError("resolver bypass set vanished (leak-off would lose direct DNS)")
+
+
+check("invariant: no regression when leak protection is OFF", _no_regression_leak_off)
 
 
 # ---------------------------------------------------------------------------
