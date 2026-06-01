@@ -165,27 +165,109 @@ def _get_interface_metric_v4(if_index: int) -> int:
         return 25
 
 
-def get_default_route_v4() -> Optional[InterfaceInfo]:
-    """Find the IPv4 default-route interface BEFORE we add our TUN routes."""
-    rc, out, err = _ps(
-        "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue "
-        "| Sort-Object RouteMetric "
-        "| Select-Object -First 1 -Property InterfaceAlias,InterfaceIndex,NextHop "
-        "| ConvertTo-Json -Compress"
-    )
-    if rc != 0 or not out.strip():
+def _looks_ipv4(ip: str) -> bool:
+    """True only for a dotted-decimal IPv4 literal (digits + dots). Also our
+    injection guard before interpolating an IP into a PowerShell command."""
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        return all(0 <= int(p) <= 255 for p in parts) and all(p.isdigit() for p in parts)
+    except ValueError:
+        return False
+
+
+def _info_from_route_json(out: str) -> Optional[InterfaceInfo]:
+    """Parse the {InterfaceAlias,InterfaceIndex,NextHop} JSON our route
+    queries emit into an InterfaceInfo (with the iface metric filled in)."""
+    if not out.strip():
         return None
     try:
         data = json.loads(out)
     except json.JSONDecodeError:
         return None
-    idx = int(data.get("InterfaceIndex", 0))
+    if isinstance(data, list):  # ConvertTo-Json can emit an array; take first
+        data = data[0] if data else {}
+    try:
+        idx = int(data.get("InterfaceIndex", 0) or 0)
+    except (TypeError, ValueError):
+        return None
     return InterfaceInfo(
         name=str(data.get("InterfaceAlias", "")),
         index=idx,
-        gateway=str(data.get("NextHop", "")),
+        gateway=str(data.get("NextHop", "") or "").strip(),
         interface_metric=_get_interface_metric_v4(idx),
     )
+
+
+def find_egress_to(remote_ip: str) -> Optional[InterfaceInfo]:
+    """Return the interface + next-hop Windows would ACTUALLY use to reach
+    `remote_ip` (the VPN server), via the OS route resolver `Find-NetRoute`.
+
+    This is the authoritative egress for TUN mode: the server host-route (loop
+    prevention) and the bypass routes MUST go out the same path the OS uses to
+    reach the server, or the tunnel's own packets to the server blackhole and
+    the user sees "подключено, но трафика нет". Picking "the first 0.0.0.0/0"
+    instead is wrong on multi-NIC boxes (Ethernet + Wi-Fi with different
+    gateways) and when a virtual adapter (Hyper-V / VMware / Tailscale / a
+    Wintun leftover) holds a stale default route.
+
+    Returns None (→ caller falls back to get_default_route_v4) when the lookup
+    fails or yields no usable gateway (empty / on-link 0.0.0.0 — never true for
+    a real public VPN server, so we don't pin a bogus route).
+    """
+    if not _looks_ipv4(remote_ip):
+        return None
+    # Find-NetRoute emits a source-IP object AND the matched route object;
+    # only the route object carries NextHop, so filter on it.
+    rc, out, _ = _ps(
+        f"$r = Find-NetRoute -RemoteIPAddress '{remote_ip}' -ErrorAction "
+        f"SilentlyContinue | Where-Object {{ $_.NextHop }} | Select-Object -First 1; "
+        f"if ($r) {{ $r | Select-Object InterfaceAlias,InterfaceIndex,NextHop "
+        f"| ConvertTo-Json -Compress }}"
+    )
+    if rc != 0:
+        return None
+    info = _info_from_route_json(out)
+    if info is None or not info.gateway or info.gateway == "0.0.0.0" or not info.index:
+        return None
+    return info
+
+
+def get_default_route_v4() -> Optional[InterfaceInfo]:
+    """Fallback egress: the IPv4 default-route interface with the LOWEST
+    EFFECTIVE metric (RouteMetric + InterfaceMetric — Windows' real
+    tie-breaker), restricted to Connected interfaces with a real gateway.
+
+    The old version sorted by RouteMetric ALONE and took the first row — on a
+    multi-NIC box (Ethernet + Wi-Fi, both RouteMetric 0) that picked an
+    arbitrary interface, and could pick a virtual adapter holding a stale
+    0.0.0.0/0. find_egress_to() (server-route based) is preferred; this is the
+    fallback when that lookup is unavailable.
+    """
+    rc, out, _ = _ps(
+        "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -AddressFamily IPv4 "
+        "-ErrorAction SilentlyContinue "
+        "| Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' -and "
+        "    (Get-NetIPInterface -InterfaceIndex $_.ifIndex -AddressFamily IPv4 "
+        "     -ErrorAction SilentlyContinue).ConnectionState -eq 'Connected' } "
+        "| Sort-Object @{Expression={ $_.RouteMetric + "
+        "    (Get-NetIPInterface -InterfaceIndex $_.ifIndex -AddressFamily IPv4 "
+        "     -ErrorAction SilentlyContinue).InterfaceMetric }} "
+        "| Select-Object -First 1 -Property InterfaceAlias,InterfaceIndex,NextHop "
+        "| ConvertTo-Json -Compress"
+    )
+    if rc != 0 or not out.strip():
+        # Last-ditch: the old unfiltered behaviour, so a setup with no
+        # 'Connected'-state default route still gets a best-effort answer.
+        rc, out, _ = _ps(
+            "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue "
+            "| Sort-Object RouteMetric | Select-Object -First 1 "
+            "-Property InterfaceAlias,InterfaceIndex,NextHop | ConvertTo-Json -Compress"
+        )
+        if rc != 0:
+            return None
+    return _info_from_route_json(out)
 
 
 def find_interface_by_name(name: str, timeout: float = 8.0) -> Optional[InterfaceInfo]:

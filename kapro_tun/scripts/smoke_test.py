@@ -593,6 +593,80 @@ check("bypass routes: adopt leftovers so disconnect cleans them",
       _bypass_routes_adopt_leftovers)
 
 
+# v2.1.1: TUN egress must bind to the route to the SERVER (Find-NetRoute), not
+# "the first 0.0.0.0/0" — fixes multi-NIC (Ethernet + Wi-Fi / virtual adapter)
+# "подключено, но трафика нет". The PS shell-out is win32-only; we mock _ps to
+# test the parse + validation contract.
+def _egress_selection_route_binding() -> None:
+    import sys as _sys
+    if _sys.platform != "win32":
+        return
+    from kapro_tun.core import network_routes as _nr
+    orig = _nr._ps
+
+    def mock(route_json):
+        def _ps(cmd, timeout=10.0):
+            # the iface-metric sub-query is a bare Get-NetIPInterface (no
+            # Find-NetRoute, no Where-Object) -> return a number.
+            if ("InterfaceMetric" in cmd and "Find-NetRoute" not in cmd
+                    and "Where-Object" not in cmd):
+                return (0, "25\n", "")
+            return (0, route_json, "")
+        return _ps
+    try:
+        # a valid server route -> select that interface + gateway
+        _nr._ps = mock('{"InterfaceAlias":"Ethernet","InterfaceIndex":21,"NextHop":"192.168.1.1"}')
+        e = _nr.find_egress_to("77.239.122.15")
+        if e is None or e.index != 21 or e.gateway != "192.168.1.1":
+            raise AssertionError(f"valid server route must be selected, got {e}")
+        # empty next-hop -> None so the caller falls back
+        _nr._ps = mock('{"InterfaceAlias":"X","InterfaceIndex":9,"NextHop":""}')
+        if _nr.find_egress_to("1.2.3.4") is not None:
+            raise AssertionError("empty next-hop must yield None (fallback)")
+        # on-link 0.0.0.0 -> None (never a real public VPN server)
+        _nr._ps = mock('{"InterfaceAlias":"X","InterfaceIndex":9,"NextHop":"0.0.0.0"}')
+        if _nr.find_egress_to("1.2.3.4") is not None:
+            raise AssertionError("on-link 0.0.0.0 next-hop must yield None")
+        # multi-NIC fallback: get_default_route_v4 parses the chosen row
+        _nr._ps = mock('{"InterfaceAlias":"Ethernet","InterfaceIndex":21,"NextHop":"10.0.0.1"}')
+        d = _nr.get_default_route_v4()
+        if d is None or d.index != 21 or d.gateway != "10.0.0.1":
+            raise AssertionError(f"fallback must parse the default route, got {d}")
+    finally:
+        _nr._ps = orig
+
+
+def _egress_injection_and_garbage_guard() -> None:
+    """A non-IPv4 remote (injection attempt / hostname / garbage) must be
+    rejected BEFORE any shell-out."""
+    import sys as _sys
+    if _sys.platform != "win32":
+        return
+    from kapro_tun.core import network_routes as _nr
+    orig = _nr._ps
+    calls = {"n": 0}
+
+    def _spy(cmd, timeout=10.0):
+        calls["n"] += 1
+        return (0, "", "")
+    try:
+        _nr._ps = _spy
+        for bad in ("", "1.2.3.4; calc", "evil.example.com", "1.2.3",
+                    "999.1.1.1", "::1", "1.2.3.4 || rm"):
+            if _nr.find_egress_to(bad) is not None:
+                raise AssertionError(f"non-IPv4 {bad!r} must be rejected")
+        if calls["n"] != 0:
+            raise AssertionError("must not shell out for a non-IPv4 remote")
+    finally:
+        _nr._ps = orig
+
+
+check("egress: bind to server route + reject empty/on-link gateway",
+      _egress_selection_route_binding)
+check("egress: reject non-IPv4 remote before shelling out",
+      _egress_injection_and_garbage_guard)
+
+
 # v1.21.1: benign broadcast/multicast UDP relay failures (Steam :27036,
 # SSDP, mDNS → WSAENOBUFS) are filtered from the user's live Logs page;
 # real lines pass through untouched.

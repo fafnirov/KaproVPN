@@ -393,17 +393,9 @@ class ConnectionManager:
                 )
             raise ConnectionError(msg)
 
-        # Step 1: snapshot the real default gateway BEFORE we mess with routes.
-        real = network_routes.get_default_route_v4()
-        if real is None or not real.gateway or not real.index:
-            raise ConnectionError(
-                "Не удалось определить текущий шлюз по умолчанию. "
-                "Возможно, нет активного интернет-соединения."
-            )
-
-        # Step 2: resolve the VPN-server hostname to an IP — we need a static
-        # route to it so xray's outbound to the server doesn't loop back into
-        # the TUN we're about to create.
+        # Step 1: resolve the VPN-server hostname to an IP FIRST. We need it
+        # both for the loop-prevention host-route below AND to pick the egress
+        # interface bound to the actual path to the server.
         server_host = str(config.outbound.get("server", "")).strip()
         if not server_host:
             raise ConnectionError("В конфиге нет адреса сервера.")
@@ -411,6 +403,23 @@ class ConnectionManager:
             server_ip = socket.gethostbyname(server_host)
         except socket.gaierror as e:
             raise ConnectionError(f"Не удалось резолвнуть VPN-сервер «{server_host}»: {e}") from e
+
+        # Step 2: snapshot the real egress (interface + gateway) BEFORE we add
+        # TUN routes — bound to the route the OS uses TO THE SERVER, not just
+        # "the first 0.0.0.0/0". On multi-NIC boxes (Ethernet + Wi-Fi with
+        # different gateways) or with a virtual adapter holding a stale default
+        # route, the latter picks the wrong interface and the tunnel blackholes
+        # ("подключено, но трафика нет"). find_egress_to() asks Windows which
+        # path actually reaches the server; get_default_route_v4() is the
+        # effective-metric fallback if that lookup is unavailable.
+        real = (network_routes.find_egress_to(server_ip)
+                or network_routes.get_default_route_v4())
+        if real is None or not real.gateway or not real.index:
+            raise ConnectionError(
+                "Не удалось определить шлюз до VPN-сервера. "
+                "Возможно, нет активного интернет-соединения."
+            )
+        self._log(f"[*] Egress к серверу: {real.name} (gw {real.gateway})")
 
         # Step 3: write + validate + start xray (its SOCKS5 inbound is what
         # tun2socks forwards into).
